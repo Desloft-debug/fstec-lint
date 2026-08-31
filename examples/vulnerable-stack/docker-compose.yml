@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:latest
+    environment:
+      POSTGRES_PASSWORD: SuperSecret123
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - pgdata:/var/lib/postgresql/data
+
+  web:
+    build: .
+    image: myorg/web:latest
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    environment:
+      DB_PASSWORD: SuperSecret123
+      DEBUG: "true"
+
+volumes:
+  pgdata:

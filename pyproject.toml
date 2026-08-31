@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fstec-lint"
+version = "0.1.0"
+description = "Статический аудит Docker/PostgreSQL инфраструктуры с привязкой находок к мерам защиты ФСТЭК (приказы №21/№17)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Desloft-debug" }]
+keywords = ["security", "fstec", "docker", "postgresql", "compliance", "linter", "iso27001", "devsecops"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/Desloft-debug/fstec-lint"
+Issues = "https://github.com/Desloft-debug/fstec-lint/issues"
+
+[project.scripts]
+fstec-lint = "fstec_lint.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fstec_lint*"]
+
+[tool.setuptools.package-data]
+fstec_lint = ["rules/*.yaml"]

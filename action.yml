@@ -1,0 +1,51 @@
+name: "fstec-lint"
+description: "Статический аудит Docker/PostgreSQL конфигураций с привязкой к мерам ФСТЭК (приказы №21/№17)"
+author: "Desloft-debug"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Каталог для сканирования"
+    required: false
+    default: "."
+  format:
+    description: "Формат отчёта: text | json | html"
+    required: false
+    default: "text"
+  output:
+    description: "Путь для сохранения отчёта"
+    required: false
+    default: "fstec-lint-report.txt"
+  fail-on:
+    description: "Минимальная severity, при которой джоба падает: critical | high | medium | low | none"
+    required: false
+    default: "high"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install fstec-lint
+      shell: bash
+      run: pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
+
+    - name: Run fstec-lint
+      shell: bash
+      run: |
+        fstec-lint "${{ inputs.path }}" \
+          --format "${{ inputs.format }}" \
+          --output "${{ inputs.output }}" \
+          --fail-on "${{ inputs.fail-on }}"
+
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fstec-lint-report
+        path: ${{ inputs.output }}
