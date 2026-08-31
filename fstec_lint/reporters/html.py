@@ -19,7 +19,7 @@ def _row(finding: Finding) -> str:
           <td><span class="badge" style="background:{color}">{finding.rule.severity.name}</span></td>
           <td>{escape(finding.rule.id)}</td>
           <td>{escape(finding.rule.title)}</td>
-          <td>{escape(finding.rule.measure)}<br><small>{escape(finding.rule.measure_title)}</small></td>
+          <td>{escape(finding.rule.measure)}<br><small>{escape(finding.rule.measure_title)}</small><br><small>{escape(finding.rule.orders)}</small></td>
           <td>{escape(finding.file)}<br><small>{escape(finding.location)}</small></td>
           <td>{escape(finding.detail)}</td>
           <td>{escape(finding.rule.remediation)}</td>

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fstec-lint"
 version = "0.1.0"
-description = "Статический аудит Docker/PostgreSQL инфраструктуры с привязкой находок к мерам защиты ФСТЭК (приказы №21/№17)"
+description = "Статический аудит Docker/PostgreSQL инфраструктуры с привязкой находок к мерам защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -28,6 +28,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [project.urls]
@@ -42,3 +44,20 @@ include = ["fstec_lint*"]
 
 [tool.setuptools.package-data]
 fstec_lint = ["rules/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "UP", "I", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Встроенные HTML/CSS-шаблоны длиннее лимита в 100 символов — разбивать их
+# построчно только ради ruff не имеет смысла.
+"fstec_lint/reporters/html.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true

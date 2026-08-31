@@ -23,6 +23,8 @@ def render(findings: list[Finding]) -> str:
         lines.append(f"       файл: {finding.file}")
         lines.append(f"       где:  {finding.location}")
         lines.append(f"       мера: {finding.rule.measure} — {finding.rule.measure_title}")
+        if finding.rule.orders:
+            lines.append(f"       приказ: {finding.rule.orders}")
         lines.append(f"       факт: {finding.detail}")
         lines.append(f"       фикс: {finding.rule.remediation}")
         lines.append("")

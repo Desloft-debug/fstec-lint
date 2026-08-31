@@ -32,7 +32,9 @@ def test_secret_in_environment_dict_flagged():
 
 
 def test_secret_file_variant_not_flagged():
-    compose = {"services": {"db": {"environment": {"POSTGRES_PASSWORD_FILE": "/run/secrets/db_password"}}}}
+    compose = {
+        "services": {"db": {"environment": {"POSTGRES_PASSWORD_FILE": "/run/secrets/db_password"}}}
+    }
     assert cc.check_secrets_in_environment(compose) == []
 
 
@@ -105,3 +107,63 @@ def test_no_new_privileges_missing_flagged():
 def test_no_new_privileges_present_ok():
     compose = {"services": {"web": {"security_opt": ["no-new-privileges:true"]}}}
     assert cc.check_missing_no_new_privileges(compose) == []
+
+
+def test_docker_api_exposed_flagged():
+    compose = {"services": {"web": {"ports": ["2375:2375"]}}}
+    assert len(cc.check_docker_api_exposed(compose)) == 1
+
+
+def test_docker_api_bound_to_loopback_ok():
+    compose = {"services": {"web": {"ports": ["127.0.0.1:2375:2375"]}}}
+    assert cc.check_docker_api_exposed(compose) == []
+
+
+def test_missing_resource_limits_flagged():
+    compose = {"services": {"web": {}}}
+    assert len(cc.check_missing_resource_limits(compose)) == 1
+
+
+def test_resource_limits_via_legacy_keys_ok():
+    compose = {"services": {"web": {"mem_limit": "512m"}}}
+    assert cc.check_missing_resource_limits(compose) == []
+
+
+def test_resource_limits_via_deploy_ok():
+    compose = {"services": {"web": {"deploy": {"resources": {"limits": {"memory": "512M"}}}}}}
+    assert cc.check_missing_resource_limits(compose) == []
+
+
+def test_missing_healthcheck_flagged():
+    compose = {"services": {"web": {}}}
+    assert len(cc.check_missing_healthcheck(compose)) == 1
+
+
+def test_healthcheck_present_ok():
+    compose = {"services": {"web": {"healthcheck": {"test": ["CMD", "true"]}}}}
+    assert cc.check_missing_healthcheck(compose) == []
+
+
+def test_healthcheck_disabled_flagged():
+    compose = {"services": {"web": {"healthcheck": {"disable": True}}}}
+    assert len(cc.check_missing_healthcheck(compose)) == 1
+
+
+def test_debug_mode_enabled_flagged():
+    compose = {"services": {"web": {"environment": {"DEBUG": "true"}}}}
+    assert len(cc.check_debug_mode_enabled(compose)) == 1
+
+
+def test_debug_mode_disabled_ok():
+    compose = {"services": {"web": {"environment": {"DEBUG": "false"}}}}
+    assert cc.check_debug_mode_enabled(compose) == []
+
+
+def test_sensitive_host_mount_flagged():
+    compose = {"services": {"web": {"volumes": ["/etc:/host-etc"]}}}
+    assert len(cc.check_sensitive_host_mount(compose)) == 1
+
+
+def test_regular_volume_mount_ok():
+    compose = {"services": {"web": {"volumes": ["./data:/app/data"]}}}
+    assert cc.check_sensitive_host_mount(compose) == []

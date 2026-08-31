@@ -9,7 +9,7 @@ _SETTING_RE = re.compile(r"^([A-Za-z0-9_.]+)\s*=?\s*(.+)$")
 def parse_postgresql_conf(path: Path) -> dict:
     """Разбирает postgresql.conf в dict {параметр: значение}, ключи в нижнем регистре."""
     settings: dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.split("#", 1)[0].strip()
             if not line:
@@ -24,9 +24,9 @@ def parse_postgresql_conf(path: Path) -> dict:
 
 
 def parse_pg_hba(path: Path) -> list[dict]:
-    """Разбирает pg_hba.conf в список записей {type, database, user, address, method, options, raw}."""
+    """Разбирает pg_hba.conf в список записей {type, database, user, address, method, options}."""
     records: list[dict] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.split("#", 1)[0].strip()
             if not line:

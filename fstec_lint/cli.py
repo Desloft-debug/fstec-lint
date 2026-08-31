@@ -14,11 +14,23 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fstec-lint",
         description=(
             "Статический аудит инфраструктуры (Docker Compose, PostgreSQL) "
-            "с привязкой находок к мерам защиты ФСТЭК (приказы №21/№17)."
+            "с привязкой находок к мерам защиты ФСТЭК (приказ №21 / приказ "
+            "№117, заменивший №17)."
         ),
     )
-    parser.add_argument("path", nargs="?", default=".", help="каталог или файл для сканирования (по умолчанию: .)")
-    parser.add_argument("-f", "--format", choices=["text", "json", "html"], default="text", help="формат отчёта")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="каталог или файл для сканирования (по умолчанию: .)",
+    )
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["text", "json", "html"],
+        default="text",
+        help="формат отчёта",
+    )
     parser.add_argument("-o", "--output", help="файл для сохранения отчёта (по умолчанию — stdout)")
     parser.add_argument(
         "--fail-on",
