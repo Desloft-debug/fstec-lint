@@ -1,0 +1,16 @@
+[Unit]
+Description=Демо-сервис приложения (защищённая конфигурация)
+After=network.target
+
+[Service]
+User=appsvc
+Group=appsvc
+ExecStart=/usr/local/bin/app
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

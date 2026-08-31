@@ -1,0 +1,10 @@
+[Unit]
+Description=Демо-сервис приложения (уязвимая конфигурация)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/app
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

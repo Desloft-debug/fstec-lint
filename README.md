@@ -3,9 +3,9 @@
 [![CI](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml/badge.svg)](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Статический аудит инфраструктуры (Docker Compose, PostgreSQL) с привязкой
-каждого из **23 правил** к конкретной мере защиты информации из
-регуляторной базы ФСТЭК России для ПДн и ГИС.
+Статический аудит инфраструктуры (Docker Compose, PostgreSQL, sshd_config,
+юниты systemd) с привязкой каждого из **32 правил** к конкретной мере
+защиты информации из регуляторной базы ФСТЭК России для ПДн и ГИС.
 
 Аналоги вроде Docker Bench, Lynis, Trivy или Checkov отлично находят
 проблемы, но мапят их на CIS Benchmarks / NIST. Ответа на вопрос
@@ -89,6 +89,27 @@
 | P007 | `log_statement` не `ddl`/`mod`/`all` | РСБ.2 |
 | P008 | Не задан `statement_timeout` | ОДТ.1 |
 
+**SSH** (`sshd_config`):
+
+| Правило | Проблема | Мера ФСТЭК |
+|---|---|---|
+| S001 | `PermitRootLogin yes`/`without-password` | УПД.4 / ИАФ.1 |
+| S002 | `PasswordAuthentication yes` | ИАФ.4 |
+| S003 | `PermitEmptyPasswords yes` | ИАФ.1 |
+| S004 | Включён устаревший `Protocol 1` | ЗИС.17 |
+| S005 | `X11Forwarding yes` | ЗИС.20 |
+| S006 | `MaxAuthTries` больше 4 | УПД.4 |
+
+**systemd** (`*.service`, секция `[Service]`):
+
+| Правило | Проблема | Мера ФСТЭК |
+|---|---|---|
+| U001 | Сервис выполняется от root (`User` не задан) | УПД.4 / ЗТС.3 |
+| U002 | Нет `NoNewPrivileges=true` | ЗСВ.2 |
+| U003 | Нет `ProtectSystem=full`/`strict` | ОЦЛ.1 |
+| U004 | Нет `PrivateTmp=true` | ЗСВ.2 |
+| U005 | Нет `ProtectHome=true` | УПД.4 |
+
 Полное описание, факт и рекомендация по каждому правилу — в
 [`fstec_lint/rules/`](fstec_lint/rules/). Правила описаны декларативно в
 YAML: чтобы добавить новую меру или изменить текст рекомендации, не нужно
@@ -115,14 +136,15 @@ pytest
 fstec-lint путь/к/проекту
 fstec-lint . --format json --output report.json
 fstec-lint . --format html --output report.html
+fstec-lint . --format sarif --output report.sarif   # для GitHub Code Scanning
 fstec-lint . --fail-on critical   # падать только на critical
 fstec-lint . --fail-on none       # никогда не падать, только отчёт
 ```
 
-`fstec-lint` рекурсивно ищет `docker-compose*.yml`, `postgresql.conf` и
-`pg_hba.conf` в указанном каталоге. По умолчанию команда завершается кодом
-`1`, если найдена хотя бы одна находка severity `high` или выше — это
-удобно для CI.
+`fstec-lint` рекурсивно ищет `docker-compose*.yml`, `postgresql.conf`,
+`pg_hba.conf`, `sshd_config` и `*.service` в указанном каталоге. По
+умолчанию команда завершается кодом `1`, если найдена хотя бы одна
+находка severity `high` или выше — это удобно для CI.
 
 ## Пример: до и после
 
@@ -165,9 +187,23 @@ $ fstec-lint examples/vulnerable-stack --fail-on none
        факт: порт 2375:2375 — доступ к нему эквивалентен root на хосте
        фикс: Не публикуйте сокет Docker наружу; используйте TLS (--tlsverify).
 
-... ещё 27 находок ...
+[HIGH] S001 Разрешён вход root по SSH
+       файл: examples/vulnerable-stack/sshd_config
+       где:  sshd_config: PermitRootLogin
+       мера: УПД.4 / ИАФ.1 — Управление доступом / Идентификация и аутентификация
+       факт: PermitRootLogin yes — вход root по SSH разрешён
+       фикс: Установите PermitRootLogin no, используйте sudo от именного аккаунта.
 
-Итого находок: 32 (critical=9, high=6, medium=12, low=5)
+[HIGH] U001 Сервис выполняется от root
+       файл: examples/vulnerable-stack/app.service
+       где:  [Service]: User
+       мера: УПД.4 / ЗТС.3 — Управление доступом / Защита технических средств
+       факт: User не задан или равен root — процесс выполняется от root
+       фикс: Заведите отдельного системного пользователя (User=<имя>).
+
+... ещё 35 находок ...
+
+Итого находок: 41 (critical=9, high=8, medium=15, low=9)
 ```
 
 ```
@@ -181,7 +217,10 @@ fstec-lint: нарушений не найдено.
 ресурсов (`deploy.resources.limits`) и `healthcheck`, `pg_hba.conf` и
 `postgresql.conf` переведены на `scram-sha-256` и `ssl = on`, включено
 логирование подключений и аудит DDL (`log_statement = 'ddl'`), задан
-`statement_timeout`. Сравните
+`statement_timeout`, в `sshd_config` отключены root-логин и
+парольная аутентификация, а systemd-юнит запускается от отдельного
+пользователя с `NoNewPrivileges`/`ProtectSystem`/`PrivateTmp`/`ProtectHome`.
+Сравните
 [`examples/vulnerable-stack/docker-compose.yml`](examples/vulnerable-stack/docker-compose.yml)
 и
 [`examples/hardened-stack/docker-compose.yml`](examples/hardened-stack/docker-compose.yml)
@@ -214,11 +253,11 @@ jobs:
 
 ```
 fstec_lint/
-├── parsers/        # docker-compose.yml, postgresql.conf, pg_hba.conf → dict
+├── parsers/        # compose/postgres/sshd/systemd файлы → dict
 ├── checks/         # логика проверок: parsed dict → список находок
 ├── rules/*.yaml     # метаданные правил: severity, мера ФСТЭК, remediation
 ├── engine.py       # находит файлы, связывает checks + rules, отдаёт Finding[]
-├── reporters/      # text / json / html
+├── reporters/      # text / json / html / sarif
 └── cli.py          # argparse-обвязка + exit code для CI
 ```
 
@@ -230,7 +269,9 @@ fstec_lint/
 реестрам (`PG_HBA_REGISTRY` / `POSTGRESQL_CONF_REGISTRY`), так как
 работают с данными разной формы (список записей vs. словарь параметров)
 — это ловит mypy на этапе CI, если проверку случайно зарегистрируют не
-там.
+там. Добавление нового типа файла (как sshd_config или systemd-юниты)
+сводится к: парсер в `parsers/`, реестр проверок в `checks/`, YAML с
+правилами в `rules/` и один вызов `_run_registry(...)` в `engine.scan`.
 
 ## Проверка качества кода
 
@@ -239,7 +280,7 @@ fstec_lint/
 - `ruff check` — линт (импорты, неиспользуемый код, современный синтаксис);
 - `ruff format --check` — единый стиль форматирования;
 - `mypy --ignore-missing-imports` — статическая проверка типов;
-- `pytest` на Python 3.10/3.11/3.12 — 57 тестов, включая юнит-тесты на
+- `pytest` на Python 3.10/3.11/3.12 — 87 тестов, включая юнит-тесты на
   каждое правило и end-to-end проверку обоих примеров-стендов;
 - самосканирование `examples/vulnerable-stack` и `examples/hardened-stack`
   как smoke-тест всего пайплайна.
@@ -264,10 +305,11 @@ pytest -v
       чувствительные точки монтирования, аудит DDL, statement_timeout) +
       явная привязка каждого правила к действующему приказу (`orders`)
 - [x] `ruff` + `mypy` в CI
+- [x] Правила для `sshd_config` (6 правил) и юнитов systemd (5 правил)
+- [x] SARIF-экспорт для GitHub Code Scanning (`--format sarif`)
 - [ ] Актуализировать номера мер после официальной публикации приказа
-      взамен №21 (проект от 24.07.2026, см. «Правовой статус»)
-- [ ] Правила для `sshd_config` и юнитов systemd
-- [ ] SARIF-экспорт для GitHub Code Scanning
+      взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
+      перепроверяется автоматически, следующая сверка запланирована)
 
 ## Лицензия
 
@@ -277,10 +319,10 @@ MIT, см. [LICENSE](LICENSE).
 
 ## English
 
-`fstec-lint` is a static infrastructure auditor for Docker Compose and
-PostgreSQL configurations that maps each of its **23 rules** to a
-specific control from Russia's FSTEC compliance framework for personal
-data systems and state information systems.
+`fstec-lint` is a static infrastructure auditor for Docker Compose,
+PostgreSQL, sshd_config and systemd units that maps each of its
+**32 rules** to a specific control from Russia's FSTEC compliance
+framework for personal data systems and state information systems.
 
 Existing scanners (Docker Bench, Lynis, Trivy, Checkov) map findings to
 CIS Benchmarks or NIST controls. Nothing maps a misconfiguration directly
@@ -307,7 +349,7 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy --ignore-missing-imports` and `pytest` (57 tests) across Python
+`mypy --ignore-missing-imports` and `pytest` (87 tests) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
 
