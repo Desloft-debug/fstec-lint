@@ -1,0 +1,73 @@
+# Правила для юнитов systemd (*.service), секция [Service].
+# Правовой статус — см. compose_rules.yaml и README → "Правовой статус".
+
+- id: U001
+  title: "Сервис выполняется от root"
+  severity: high
+  measure: "УПД.4 / ЗТС.3"
+  measure_title: "Управление доступом субъектов к объектам доступа / Защита технических средств"
+  orders: "№21 (ПДн) / №117 (ГИС, действует с 01.03.2026 — заменил №17)"
+  description: >
+    В секции [Service] не задан User (или задан root) — процесс
+    работает с максимальными привилегиями на хосте, хотя
+    большинству сервисов это не требуется.
+  remediation: >
+    Заведите отдельного системного пользователя и укажите
+    User=<имя> (и Group=<имя>) в [Service].
+  target: systemd_unit
+
+- id: U002
+  title: "Не установлен NoNewPrivileges"
+  severity: medium
+  measure: "ЗСВ.2"
+  measure_title: "Защита среды виртуализации"
+  orders: "№21 (ПДн) / №117 (ГИС, действует с 01.03.2026 — заменил №17)"
+  description: >
+    Без NoNewPrivileges=true процесс может получить дополнительные
+    привилегии через setuid/setgid-бинарники или файловые capabilities.
+  remediation: >
+    Добавьте NoNewPrivileges=true в [Service].
+  target: systemd_unit
+
+- id: U003
+  title: "Не установлен ProtectSystem"
+  severity: medium
+  measure: "ОЦЛ.1"
+  measure_title: "Обеспечение целостности программного обеспечения и информации"
+  orders: "№21 (ПДн) / №117 (ГИС, действует с 01.03.2026 — заменил №17)"
+  description: >
+    Без ProtectSystem=full/strict сервис может писать в системные
+    каталоги хоста (/usr, /boot и т.д.), что упрощает закрепление
+    при компрометации.
+  remediation: >
+    Добавьте ProtectSystem=strict (или full, если сервису нужно
+    писать в /etc) в [Service].
+  target: systemd_unit
+
+- id: U004
+  title: "Не установлен PrivateTmp"
+  severity: low
+  measure: "ЗСВ.2"
+  measure_title: "Защита среды виртуализации"
+  orders: "№21 (ПДн) / №117 (ГИС, действует с 01.03.2026 — заменил №17)"
+  description: >
+    Без PrivateTmp=true сервис делит /tmp с остальной системой, что
+    даёт возможность подглядывать/подменять временные файлы других
+    процессов.
+  remediation: >
+    Добавьте PrivateTmp=true в [Service].
+  target: systemd_unit
+
+- id: U005
+  title: "Не установлен ProtectHome"
+  severity: low
+  measure: "УПД.4"
+  measure_title: "Управление доступом субъектов к объектам доступа"
+  orders: "№21 (ПДн) / №117 (ГИС, действует с 01.03.2026 — заменил №17)"
+  description: >
+    Без ProtectHome сервис может читать (а в некоторых конфигурациях —
+    и писать) домашние каталоги пользователей хоста, хотя сервисам
+    это обычно не нужно.
+  remediation: >
+    Добавьте ProtectHome=true (или read-only) в [Service].
+  target: systemd_unit
