@@ -1,5 +1,5 @@
 name: "fstec-lint"
-description: "Статический аудит Docker/PostgreSQL конфигураций с привязкой к мерам ФСТЭК (приказы №21/№17)"
+description: "Статический аудит Docker/PostgreSQL конфигураций с привязкой к мерам ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
 author: "Desloft-debug"
 branding:
   icon: "shield"

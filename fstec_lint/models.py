@@ -11,7 +11,7 @@ class Severity(IntEnum):
     CRITICAL = 4
 
     @classmethod
-    def from_str(cls, value: str) -> "Severity":
+    def from_str(cls, value: str) -> Severity:
         return cls[value.upper()]
 
 
@@ -25,6 +25,7 @@ class Rule:
     description: str
     remediation: str
     target: str
+    orders: str = ""
 
 
 @dataclass(frozen=True)

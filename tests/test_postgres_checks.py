@@ -60,3 +60,27 @@ def test_password_encryption_md5_flagged():
 
 def test_password_encryption_scram_ok():
     assert pc.check_password_encryption({"password_encryption": "scram-sha-256"}) == []
+
+
+def test_statement_logging_disabled_flagged():
+    assert len(pc.check_statement_logging_disabled({"log_statement": "none"})) == 1
+
+
+def test_statement_logging_default_flagged():
+    assert len(pc.check_statement_logging_disabled({})) == 1
+
+
+def test_statement_logging_ddl_ok():
+    assert pc.check_statement_logging_disabled({"log_statement": "ddl"}) == []
+
+
+def test_missing_statement_timeout_flagged():
+    assert len(pc.check_missing_statement_timeout({"statement_timeout": "0"})) == 1
+
+
+def test_missing_statement_timeout_default_flagged():
+    assert len(pc.check_missing_statement_timeout({})) == 1
+
+
+def test_statement_timeout_set_ok():
+    assert pc.check_missing_statement_timeout({"statement_timeout": "30s"}) == []

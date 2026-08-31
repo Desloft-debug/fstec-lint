@@ -1,10 +1,8 @@
-"""Проверки для docker-compose.yml.
+"""Проверки docker-compose.yml.
 
-Каждая функция принимает распарсенный dict compose-файла и возвращает список
-кортежей (location, detail) — по одному на каждое найденное нарушение.
-Метаданные (severity, мера ФСТЭК, remediation) хранятся отдельно, в
-fstec_lint/rules/compose_rules.yaml, и связываются по идентификатору правила
-через REGISTRY внизу файла.
+Функции принимают распарсенный compose-словарь и возвращают
+(location, detail) для каждого нарушения. Severity/мера/remediation —
+в rules/compose_rules.yaml, привязка по id через REGISTRY внизу файла.
 """
 
 from __future__ import annotations
@@ -12,9 +10,15 @@ from __future__ import annotations
 import re
 
 SENSITIVE_PORTS = {"5432", "3306", "6379", "27017", "9200", "1433", "11211"}
-SECRET_KEY_RE = re.compile(r"(PASSWORD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)", re.IGNORECASE)
+SECRET_KEY_RE = re.compile(
+    r"(PASSWORD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)", re.IGNORECASE
+)
 DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "ALL", "SYS_PTRACE", "SYS_MODULE"}
 SAFE_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+DOCKER_API_PORTS = {"2375", "2376"}
+SENSITIVE_HOST_MOUNTS = {"/", "/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
+DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
+DEBUG_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _services(compose: dict) -> dict:
@@ -27,7 +31,12 @@ def check_root_user(compose: dict) -> list[tuple[str, str]]:
         if not isinstance(svc, dict):
             continue
         if "user" not in svc:
-            findings.append((f"service:{name}", "нет директивы 'user' — процесс в контейнере выполняется от root"))
+            findings.append(
+                (
+                    f"service:{name}",
+                    "нет директивы 'user' — процесс в контейнере выполняется от root",
+                )
+            )
     return findings
 
 
@@ -47,7 +56,9 @@ def check_dangerous_capabilities(compose: dict) -> list[tuple[str, str]]:
         caps = svc.get("cap_add") or []
         bad = [str(c) for c in caps if str(c).upper() in DANGEROUS_CAPS]
         if bad:
-            findings.append((f"service:{name}", f"добавлены опасные capabilities: {', '.join(bad)}"))
+            findings.append(
+                (f"service:{name}", f"добавлены опасные capabilities: {', '.join(bad)}")
+            )
     return findings
 
 
@@ -74,7 +85,12 @@ def check_secrets_in_environment(compose: dict) -> list[tuple[str, str]]:
                 # docker secrets convention: значение — это путь, а не сам секрет
                 continue
             if value and not value.startswith("${") and SECRET_KEY_RE.search(key):
-                findings.append((f"service:{name}", f"переменная {key} содержит секрет в открытом виде"))
+                findings.append(
+                    (
+                        f"service:{name}",
+                        f"переменная {key} содержит секрет в открытом виде",
+                    )
+                )
     return findings
 
 
@@ -107,7 +123,12 @@ def check_exposed_sensitive_ports(compose: dict) -> list[tuple[str, str]]:
         for port_entry in svc.get("ports") or []:
             exposed, container_port = _port_is_exposed(port_entry)
             if exposed and container_port in SENSITIVE_PORTS:
-                findings.append((f"service:{name}", f"порт {port_entry} публикуется на все интерфейсы хоста"))
+                findings.append(
+                    (
+                        f"service:{name}",
+                        f"порт {port_entry} публикуется на все интерфейсы хоста",
+                    )
+                )
     return findings
 
 
@@ -123,7 +144,12 @@ def check_latest_tag(compose: dict) -> list[tuple[str, str]]:
             continue
         last_segment = image.split("/")[-1]
         if ":" not in last_segment or last_segment.endswith(":latest"):
-            findings.append((f"service:{name}", f"образ '{image}' использует тег :latest либо не закреплён по версии/digest"))
+            findings.append(
+                (
+                    f"service:{name}",
+                    f"образ '{image}' использует тег :latest либо не закреплён по версии/digest",
+                )
+            )
     return findings
 
 
@@ -141,7 +167,11 @@ def check_docker_socket_mount(compose: dict) -> list[tuple[str, str]]:
         if not isinstance(svc, dict):
             continue
         for vol in svc.get("volumes") or []:
-            source = vol if isinstance(vol, str) else (vol.get("source", "") if isinstance(vol, dict) else "")
+            source = (
+                vol
+                if isinstance(vol, str)
+                else (vol.get("source", "") if isinstance(vol, dict) else "")
+            )
             if "docker.sock" in str(source):
                 findings.append((f"service:{name}", "внутрь контейнера смонтирован docker.sock"))
     return findings
@@ -151,7 +181,12 @@ def check_no_read_only(compose: dict) -> list[tuple[str, str]]:
     findings = []
     for name, svc in _services(compose).items():
         if isinstance(svc, dict) and svc.get("read_only") is not True:
-            findings.append((f"service:{name}", "файловая система контейнера не переведена в режим read_only"))
+            findings.append(
+                (
+                    f"service:{name}",
+                    "файловая система контейнера не переведена в режим read_only",
+                )
+            )
     return findings
 
 
@@ -162,7 +197,104 @@ def check_missing_no_new_privileges(compose: dict) -> list[tuple[str, str]]:
             continue
         sec_opt = svc.get("security_opt") or []
         if not any("no-new-privileges" in str(opt) for opt in sec_opt):
-            findings.append((f"service:{name}", "не установлена опция security_opt: no-new-privileges:true"))
+            findings.append(
+                (
+                    f"service:{name}",
+                    "не установлена опция security_opt: no-new-privileges:true",
+                )
+            )
+    return findings
+
+
+def check_docker_api_exposed(compose: dict) -> list[tuple[str, str]]:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        for port_entry in svc.get("ports") or []:
+            exposed, container_port = _port_is_exposed(port_entry)
+            if exposed and container_port in DOCKER_API_PORTS:
+                findings.append(
+                    (
+                        f"service:{name}",
+                        f"порт {port_entry} — незащищённый Docker Engine API, "
+                        "доступ к нему эквивалентен root на хосте",
+                    )
+                )
+    return findings
+
+
+def check_missing_resource_limits(compose: dict) -> list[tuple[str, str]]:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        has_legacy_limits = "mem_limit" in svc or "cpus" in svc
+        deploy = svc.get("deploy")
+        has_deploy_limits = bool(
+            isinstance(deploy, dict) and (deploy.get("resources") or {}).get("limits")
+        )
+        if not has_legacy_limits and not has_deploy_limits:
+            findings.append(
+                (
+                    f"service:{name}",
+                    "не заданы ограничения ресурсов (mem_limit/cpus или "
+                    "deploy.resources.limits) — один контейнер может исчерпать ресурсы хоста",
+                )
+            )
+    return findings
+
+
+def check_missing_healthcheck(compose: dict) -> list[tuple[str, str]]:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        healthcheck = svc.get("healthcheck")
+        if not healthcheck or (isinstance(healthcheck, dict) and healthcheck.get("disable")):
+            findings.append(
+                (
+                    f"service:{name}",
+                    "не задан healthcheck — отказ сервиса не будет обнаружен автоматически",
+                )
+            )
+    return findings
+
+
+def check_debug_mode_enabled(compose: dict) -> list[tuple[str, str]]:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        for key, value in _env_items(svc.get("environment")):
+            if DEBUG_KEY_RE.search(key) and value.strip().lower() in DEBUG_TRUTHY:
+                findings.append(
+                    (
+                        f"service:{name}",
+                        f"{key}={value} — режим отладки включён, приложение может "
+                        "раскрывать трассировки и внутренние данные",
+                    )
+                )
+    return findings
+
+
+def check_sensitive_host_mount(compose: dict) -> list[tuple[str, str]]:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        for vol in svc.get("volumes") or []:
+            if isinstance(vol, dict):
+                source_path = str(vol.get("source", ""))
+            else:
+                source_path = str(vol).split(":")[0]
+            if source_path in SENSITIVE_HOST_MOUNTS:
+                findings.append(
+                    (
+                        f"service:{name}",
+                        f"смонтирован чувствительный путь хоста '{source_path}' внутрь контейнера",
+                    )
+                )
     return findings
 
 
@@ -177,4 +309,9 @@ REGISTRY = {
     "C008": check_docker_socket_mount,
     "C009": check_no_read_only,
     "C010": check_missing_no_new_privileges,
+    "C011": check_docker_api_exposed,
+    "C012": check_missing_resource_limits,
+    "C013": check_missing_healthcheck,
+    "C014": check_debug_mode_enabled,
+    "C015": check_sensitive_host_mount,
 }

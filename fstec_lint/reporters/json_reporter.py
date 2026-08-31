@@ -13,6 +13,7 @@ def render(findings: list[Finding]) -> str:
             "severity": finding.rule.severity.name.lower(),
             "measure": finding.rule.measure,
             "measure_title": finding.rule.measure_title,
+            "orders": finding.rule.orders,
             "file": finding.file,
             "location": finding.location,
             "detail": finding.detail,
