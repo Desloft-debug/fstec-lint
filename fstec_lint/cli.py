@@ -13,9 +13,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fstec-lint",
         description=(
-            "Статический аудит инфраструктуры (Docker Compose, PostgreSQL, "
-            "sshd_config, systemd) с привязкой находок к мерам защиты ФСТЭК "
-            "(приказ №21 / приказ №117, заменивший №17)."
+            "Статический аудит инфраструктуры (Docker Compose, Dockerfile, "
+            "PostgreSQL, sshd_config, systemd) с привязкой находок к мерам "
+            "защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)."
         ),
     )
     parser.add_argument(

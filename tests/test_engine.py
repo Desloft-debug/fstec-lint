@@ -37,6 +37,12 @@ def test_vulnerable_stack_triggers_expected_rules():
         "U003",
         "U004",
         "U005",
+        "D001",
+        "D002",
+        "D003",
+        "D004",
+        "D005",
+        "D006",
     ):
         assert expected in ids, f"ожидалось нарушение {expected}, найдено: {sorted(ids)}"
 

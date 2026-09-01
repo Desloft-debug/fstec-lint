@@ -7,9 +7,10 @@ from typing import Any
 
 import yaml
 
-from .checks import compose_checks, postgres_checks, sshd_checks, systemd_checks
+from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
 from .models import Finding, Rule, Severity
 from .parsers.compose import parse_compose
+from .parsers.dockerfile import parse_dockerfile
 from .parsers.postgres import parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
 from .parsers.systemd import parse_systemd_unit
@@ -26,6 +27,7 @@ POSTGRESQL_CONF_PATTERNS = ("postgresql.conf",)
 PG_HBA_PATTERNS = ("pg_hba.conf",)
 SSHD_CONFIG_PATTERNS = ("sshd_config",)
 SYSTEMD_UNIT_PATTERNS = ("*.service",)
+DOCKERFILE_PATTERNS = ("Dockerfile", "Dockerfile.*", "*.dockerfile")
 
 CheckFn = Callable[[Any], list[tuple[str, str]]]
 
@@ -62,6 +64,7 @@ def discover_files(root: Path) -> dict[str, list[Path]]:
         "postgresql_conf": [],
         "sshd_config": [],
         "systemd_unit": [],
+        "dockerfile": [],
     }
     if root.is_file():
         candidates = [root]
@@ -80,6 +83,8 @@ def discover_files(root: Path) -> dict[str, list[Path]]:
             found["sshd_config"].append(path)
         elif _matches_any(name, SYSTEMD_UNIT_PATTERNS):
             found["systemd_unit"].append(path)
+        elif _matches_any(name, DOCKERFILE_PATTERNS):
+            found["dockerfile"].append(path)
     return found
 
 
@@ -145,6 +150,13 @@ def scan(root: Path, rules_dir: Path = RULES_DIR) -> list[Finding]:
         rules_by_target.get("systemd_unit", []),
         systemd_checks.REGISTRY,
         parse_systemd_unit,
+    )
+    _run_registry(
+        findings,
+        files["dockerfile"],
+        rules_by_target.get("dockerfile", []),
+        dockerfile_checks.REGISTRY,
+        parse_dockerfile,
     )
 
     findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id))

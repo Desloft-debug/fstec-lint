@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fstec_lint.parsers.compose import parse_compose
+from fstec_lint.parsers.dockerfile import parse_dockerfile
 from fstec_lint.parsers.postgres import parse_pg_hba, parse_postgresql_conf
 from fstec_lint.parsers.sshd import parse_sshd_config
 from fstec_lint.parsers.systemd import parse_systemd_unit
@@ -49,3 +50,17 @@ def test_parse_systemd_unit():
     assert unit["Service"]["User"] == "appsvc"
     assert unit["Service"]["NoNewPrivileges"] == "true"
     assert unit["Unit"]["After"] == "network.target"
+
+
+def test_parse_dockerfile_vulnerable():
+    instructions = parse_dockerfile(EXAMPLES / "vulnerable-stack" / "Dockerfile")
+    by_instruction = [i["instruction"] for i in instructions]
+    assert by_instruction[0] == "FROM"
+    assert "ARG" in by_instruction
+    assert "USER" not in by_instruction
+
+
+def test_parse_dockerfile_handles_line_continuation():
+    instructions = parse_dockerfile(EXAMPLES / "hardened-stack" / "Dockerfile")
+    run_instructions = [i for i in instructions if i["instruction"] == "RUN"]
+    assert any("apt-get update" in i["args"] and "rm -rf" in i["args"] for i in run_instructions)
