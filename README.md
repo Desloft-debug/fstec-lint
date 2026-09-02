@@ -153,6 +153,10 @@ fstec-lint . --format html --output report.html
 fstec-lint . --format sarif --output report.sarif   # для GitHub Code Scanning
 fstec-lint . --fail-on critical   # падать только на critical
 fstec-lint . --fail-on none       # никогда не падать, только отчёт
+fstec-lint --list-rules           # каталог правил, без сканирования
+
+fstec-lint . --write-baseline .fstec-lint-baseline.json   # зафиксировать текущий долг
+fstec-lint . --baseline .fstec-lint-baseline.json         # падать только на новых находках
 ```
 
 `fstec-lint` рекурсивно ищет `docker-compose*.yml`, `Dockerfile`,
@@ -187,6 +191,38 @@ docker-compose.yml / compose.yaml (15):
 Сводка внизу честно показывает и обратное — какие группы мер инструмент
 **не** закрывает (АВЗ, СОВ, ИНЦ, УКФ и др.): статический анализ конфигов
 их в принципе не проверяет, и закрывать их нужно другими средствами.
+
+### Внедрение в существующий проект: baseline
+
+Главная проблема при подключении любого линтера к живому проекту — он
+сразу даёт десятки находок, CI краснеет, и его отключают. Baseline
+фиксирует текущее состояние как известный долг: сборка падает только на
+**новых** находках, а старые остаются в отчёте, но не блокируют.
+
+```bash
+fstec-lint . --write-baseline .fstec-lint-baseline.json   # один раз, зафиксировать долг
+git add .fstec-lint-baseline.json
+
+fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
+```
+
+```
+$ fstec-lint examples/vulnerable-stack --baseline baseline.json --fail-on critical
+fstec-lint: подавлено baseline-ом: 47
+[CRIT] C015 Смонтирован чувствительный путь хоста
+       файл: examples/vulnerable-stack/docker-compose.yml
+       где:  service:db
+       ...
+Итого находок: 1 (critical=1)
+```
+
+Находка опознаётся по тройке «правило + файл + место» (например,
+`C015 | docker-compose.yml | service:db`), пути хранятся относительными —
+чтобы файл работал одинаково на машине разработчика и в CI. Текст
+описания в отпечаток не входит: правки формулировок в правилах не должны
+внезапно «воскрешать» весь зафиксированный долг. Файл отсортирован и
+детерминирован, поэтому его диффы читаемы на ревью — видно ровно то, что
+добавили или разобрали.
 
 ## Пример: до и после
 
@@ -332,7 +368,7 @@ Dockerfile) сводится к: парсер в `parsers/`, реестр про
 - `ruff check` — линт (импорты, неиспользуемый код, современный синтаксис);
 - `ruff format --check` — единый стиль форматирования;
 - `mypy --ignore-missing-imports` — статическая проверка типов;
-- `pytest` на Python 3.10/3.11/3.12 — 114 тестов, включая юнит-тесты на
+- `pytest` на Python 3.10/3.11/3.12 — 127 тестов, включая юнит-тесты на
   каждое правило, end-to-end проверку обоих примеров-стендов и проверку
   целостности каталога правил (у каждого правила из YAML есть
   функция-проверка с тем же `id`, и наоборот — иначе правило молча
@@ -366,6 +402,8 @@ pytest -v
       секрет в `ARG`, незакреплённый `FROM`, `curl \| sh`, нет `HEALTHCHECK`)
 - [x] Каталог правил (`--list-rules`) со сводкой покрытия групп мер ФСТЭК
       и тест целостности «YAML ↔ функции-проверки»
+- [x] Baseline (`--write-baseline` / `--baseline`) — внедрение в проект с
+      существующим долгом без «красного CI с первого дня»
 - [ ] Актуализировать номера мер после официальной публикации приказа
       взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
       перепроверяется периодически, на 01.09.2026 приказ всё ещё не
@@ -410,7 +448,7 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy --ignore-missing-imports` and `pytest` (114 tests) across Python
+`mypy --ignore-missing-imports` and `pytest` (127 tests) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
 
@@ -420,6 +458,10 @@ Quick start:
 pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
 fstec-lint . --format html --output report.html --fail-on high
 fstec-lint --list-rules   # rule catalogue + which FSTEC measure groups it covers
+
+# adopting it in an existing project without a red CI on day one:
+fstec-lint . --write-baseline .fstec-lint-baseline.json   # accept current debt
+fstec-lint . --baseline .fstec-lint-baseline.json         # fail only on new findings
 ```
 
 See the table above (`Что проверяется`) for the full rule list, and

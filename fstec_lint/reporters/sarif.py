@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 from .. import __version__
 from ..models import Finding, Severity
@@ -12,13 +11,6 @@ LEVEL = {
     Severity.MEDIUM: "warning",
     Severity.LOW: "note",
 }
-
-
-def _relative(path: str) -> str:
-    try:
-        return os.path.relpath(path, start=os.getcwd())
-    except ValueError:
-        return path
 
 
 def render(findings: list[Finding]) -> str:
@@ -47,7 +39,7 @@ def render(findings: list[Finding]) -> str:
                 "locations": [
                     {
                         "physicalLocation": {
-                            "artifactLocation": {"uri": _relative(finding.file)},
+                            "artifactLocation": {"uri": finding.relative_file()},
                             "region": {"startLine": 1},
                         }
                     }
