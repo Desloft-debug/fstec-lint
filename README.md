@@ -160,6 +160,34 @@ fstec-lint . --fail-on none       # никогда не падать, тольк
 каталоге. По умолчанию команда завершается кодом `1`, если найдена хотя
 бы одна находка severity `high` или выше — это удобно для CI.
 
+### Каталог правил
+
+Отдельно от сканирования можно выгрузить перечень самих проверок — какие
+правила вообще есть и какие группы мер ФСТЭК они затрагивают. Это тот
+самый перечень, который удобно приложить к документам по оценке
+соответствия:
+
+```bash
+fstec-lint --list-rules                  # текстом
+fstec-lint --list-rules --format json    # машиночитаемо
+```
+
+```
+Правил всего: 40
+
+docker-compose.yml / compose.yaml (15):
+  [HIGH] C001  УПД.4 / ЗСВ.2          Контейнер запускается от имени root
+  [CRIT] C002  ЗСВ.2 / УПД.4          Контейнер запущен в privileged-режиме
+  ...
+
+Затронутые группы мер ФСТЭК: АНЗ (5), ЗИС (7), ЗНИ (3), ЗПИ (1), ЗСВ (11),
+ЗТС (1), ИАФ (7), ОДТ (4), ОЦЛ (6), РСБ (2), УПД (10)
+```
+
+Сводка внизу честно показывает и обратное — какие группы мер инструмент
+**не** закрывает (АВЗ, СОВ, ИНЦ, УКФ и др.): статический анализ конфигов
+их в принципе не проверяет, и закрывать их нужно другими средствами.
+
 ## Пример: до и после
 
 В [`examples/vulnerable-stack`](examples/vulnerable-stack) — заведомо
@@ -304,8 +332,11 @@ Dockerfile) сводится к: парсер в `parsers/`, реестр про
 - `ruff check` — линт (импорты, неиспользуемый код, современный синтаксис);
 - `ruff format --check` — единый стиль форматирования;
 - `mypy --ignore-missing-imports` — статическая проверка типов;
-- `pytest` на Python 3.10/3.11/3.12 — 103 теста, включая юнит-тесты на
-  каждое правило и end-to-end проверку обоих примеров-стендов;
+- `pytest` на Python 3.10/3.11/3.12 — 114 тестов, включая юнит-тесты на
+  каждое правило, end-to-end проверку обоих примеров-стендов и проверку
+  целостности каталога правил (у каждого правила из YAML есть
+  функция-проверка с тем же `id`, и наоборот — иначе правило молча
+  ничего не делает);
 - самосканирование `examples/vulnerable-stack` и `examples/hardened-stack`
   как smoke-тест всего пайплайна.
 
@@ -333,6 +364,8 @@ pytest -v
 - [x] SARIF-экспорт для GitHub Code Scanning (`--format sarif`)
 - [x] Правила для Dockerfile (6 правил: root-пользователь, `ADD` по URL,
       секрет в `ARG`, незакреплённый `FROM`, `curl \| sh`, нет `HEALTHCHECK`)
+- [x] Каталог правил (`--list-rules`) со сводкой покрытия групп мер ФСТЭК
+      и тест целостности «YAML ↔ функции-проверки»
 - [ ] Актуализировать номера мер после официальной публикации приказа
       взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
       перепроверяется периодически, на 01.09.2026 приказ всё ещё не
@@ -377,7 +410,7 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy --ignore-missing-imports` and `pytest` (103 tests) across Python
+`mypy --ignore-missing-imports` and `pytest` (114 tests) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
 
@@ -386,6 +419,7 @@ Quick start:
 ```bash
 pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
 fstec-lint . --format html --output report.html --fail-on high
+fstec-lint --list-rules   # rule catalogue + which FSTEC measure groups it covers
 ```
 
 See the table above (`Что проверяется`) for the full rule list, and
