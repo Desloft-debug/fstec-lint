@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import baseline as baseline_module
 from .engine import load_rules, scan
 from .models import Severity
 from .reporters import html, json_reporter, rules_catalog, sarif, text
@@ -43,6 +44,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="показать каталог правил и покрытие групп мер ФСТЭК, ничего не сканируя",
     )
+    parser.add_argument(
+        "--baseline",
+        metavar="FILE",
+        help="не сообщать о находках, перечисленных в baseline-файле (падать только на новых)",
+    )
+    parser.add_argument(
+        "--write-baseline",
+        metavar="FILE",
+        help="записать текущие находки в baseline-файл и выйти с кодом 0",
+    )
     return parser
 
 
@@ -70,6 +81,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     findings = scan(root)
+
+    if args.write_baseline:
+        Path(args.write_baseline).write_text(
+            baseline_module.render(findings) + "\n", encoding="utf-8"
+        )
+        print(
+            f"fstec-lint: в baseline записано находок: {len(findings)} ({args.write_baseline})",
+            file=sys.stderr,
+        )
+        return 0
+
+    if args.baseline:
+        try:
+            known = baseline_module.load(Path(args.baseline))
+        except baseline_module.BaselineError as exc:
+            print(f"fstec-lint: {exc}", file=sys.stderr)
+            return 2
+        findings, suppressed = baseline_module.apply(findings, known)
+        if suppressed:
+            print(f"fstec-lint: подавлено baseline-ом: {suppressed}", file=sys.stderr)
 
     if args.format == "json":
         output = json_reporter.render(findings)
