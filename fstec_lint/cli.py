@@ -4,9 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from .engine import scan
+from .engine import load_rules, scan
 from .models import Severity
-from .reporters import html, json_reporter, sarif, text
+from .reporters import html, json_reporter, rules_catalog, sarif, text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,11 +38,32 @@ def build_parser() -> argparse.ArgumentParser:
         default="high",
         help="минимальная severity, при которой команда завершится с кодом 1 (по умолчанию: high)",
     )
+    parser.add_argument(
+        "--list-rules",
+        action="store_true",
+        help="показать каталог правил и покрытие групп мер ФСТЭК, ничего не сканируя",
+    )
     return parser
+
+
+def _write(output: str, destination: str | None) -> None:
+    if destination:
+        Path(destination).write_text(output + "\n", encoding="utf-8")
+    else:
+        print(output)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.list_rules:
+        rules = load_rules()
+        if args.format == "json":
+            _write(rules_catalog.render_json(rules), args.output)
+        else:
+            _write(rules_catalog.render_text(rules), args.output)
+        return 0
+
     root = Path(args.path).resolve()
     if not root.exists():
         print(f"fstec-lint: путь не найден: {root}", file=sys.stderr)
@@ -59,10 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = text.render(findings)
 
-    if args.output:
-        Path(args.output).write_text(output + "\n", encoding="utf-8")
-    else:
-        print(output)
+    _write(output, args.output)
 
     if args.fail_on == "none":
         return 0
