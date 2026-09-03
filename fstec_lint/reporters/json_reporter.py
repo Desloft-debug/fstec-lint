@@ -14,6 +14,8 @@ def render(findings: list[Finding]) -> str:
             "measure": finding.rule.measure,
             "measure_title": finding.rule.measure_title,
             "orders": finding.rule.orders,
+            "methodology": finding.rule.methodology,
+            "methodology_title": finding.rule.methodology_title,
             "legacy_measure": finding.rule.legacy_measure,
             "file": finding.relative_file(),
             "line": finding.line,
