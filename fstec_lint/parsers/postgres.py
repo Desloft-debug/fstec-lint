@@ -5,7 +5,16 @@ from pathlib import Path
 
 from .base import ConfigMap
 
-_SETTING_RE = re.compile(r"^([A-Za-z0-9_.]+)\s*=?\s*(.+)$")
+# Разделитель '=' в postgresql.conf необязателен ('shared_buffers 128MB'),
+# но между именем и значением обязан быть либо он, либо пробел. Прежний
+# шаблон делал необязательным и то и другое, поэтому на строке из одного
+# слова откатывался и выдумывал настройку: 'ssl' читалось как ss = l,
+# а 'sslx' — как ssl = x, то есть как значение реального параметра.
+_SETTING_RE = re.compile(r"^([A-Za-z0-9_.]+)(?:\s*=\s*|\s+)(\S.*)$")
+
+# Вторая (устаревшая, но действующая) форма адреса в pg_hba.conf — адрес
+# и сетевая маска отдельными полями: 'host all all 192.168.0.0 255.255.0.0 md5'.
+_NETMASK_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 
 
 def _strip_comment(line: str) -> str:
@@ -66,9 +75,20 @@ def parse_pg_hba(path: Path) -> list[dict]:
             else:
                 if len(parts) < 5:
                     continue
-                address = parts[3]
-                method = parts[4]
-                options = parts[5:]
+                # 'адрес маска' занимает два поля, и метод стоит на одну
+                # позицию правее. Без этой ветки методом становилась маска,
+                # а настоящий метод уезжал в options — и P001 молчал на
+                # записи с 'trust', то есть на входе без пароля.
+                if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
+                    if len(parts) < 6:
+                        continue
+                    address = f"{parts[3]} {parts[4]}"
+                    method = parts[5]
+                    options = parts[6:]
+                else:
+                    address = parts[3]
+                    method = parts[4]
+                    options = parts[5:]
 
             records.append(
                 {

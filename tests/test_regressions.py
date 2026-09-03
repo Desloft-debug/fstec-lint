@@ -16,6 +16,8 @@ from fstec_lint.cli import main
 from fstec_lint.engine import inline_suppressions, scan
 from fstec_lint.models import Severity
 from fstec_lint.parsers.dockerfile import parse_dockerfile
+from fstec_lint.parsers.postgres import parse_postgresql_conf
+from fstec_lint.parsers.systemd import parse_systemd_unit
 
 
 def _write(path: Path, text: str) -> Path:
@@ -184,9 +186,9 @@ def test_specific_ignores_on_the_same_line_still_add_up(tmp_path):
     ("content", "expected"),
     [
         ("[]", "ожидался объект JSON"),
-        ('{"version": 2, "findings": {}}', "должно быть списком"),
-        ('{"version": 2, "findings": [{"rule_id": "C001"}]}', "без обязательных полей"),
-        ('{"version": 2, "findings": ["C001"]}', "без обязательных полей"),
+        ('{"version": 3, "findings": {}}', "должно быть списком"),
+        ('{"version": 3, "findings": [{"rule_id": "C001"}]}', "без обязательных полей"),
+        ('{"version": 3, "findings": ["C001"]}', "без обязательных полей"),
     ],
 )
 def test_structurally_broken_baseline_raises_baseline_error(tmp_path, content, expected):
@@ -276,3 +278,284 @@ def test_list_rules_warns_when_the_format_is_not_supported(capsys):
     captured = capsys.readouterr()
     assert "не поддерживает формат sarif" in captured.err
     assert "Правил всего" in captured.out
+
+
+# --- 0.9.0: тихие пропуски и ложные находки ----------------------------
+
+
+def test_scalar_instead_of_list_is_not_iterated_character_by_character(tmp_path):
+    """Строка вместо списка не должна обходиться по буквам.
+
+    'volumes: "/var/run/docker.sock:..."' — невалидный compose, но
+    посимвольный обход давал и ложные C015 (символ '/' как «смонтирован
+    корень хоста»), и молчаливый пропуск C008: ни одна буква не
+    совпадала с 'docker.sock'.
+    """
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  b:\n"
+        "    image: redis:7.2\n"
+        '    volumes: "/var/run/docker.sock:/var/run/docker.sock"\n'
+        '    cap_add: "SYS_ADMIN"\n'
+        '    ports: "5432:5432"\n',
+    )
+
+    found = {f.rule.id for f in scan(tmp_path).findings}
+
+    assert {"C003", "C005", "C008"} <= found
+
+
+def test_scalar_volume_does_not_produce_a_finding_per_character(tmp_path):
+    """Каждый '/' в строке давал отдельную находку «смонтирован корень хоста»."""
+    _write(
+        tmp_path / "docker-compose.yml",
+        'services:\n  b:\n    image: redis:7.2\n    volumes: "/etc:/host-etc"\n',
+    )
+
+    assert sum(f.rule.id == "C015" for f in scan(tmp_path).findings) == 1
+
+
+def test_pg_hba_address_with_separate_netmask_keeps_the_real_method(tmp_path):
+    """Форма «адрес маска» занимает два поля, метод стоит правее.
+
+    Раньше методом становилась маска, а настоящий 'trust' уезжал в
+    options — P001 молчал на записи, разрешающей вход без пароля.
+    """
+    _write(
+        tmp_path / "pg_hba.conf",
+        "host    all   all   192.168.0.0   255.255.0.0   trust\n",
+    )
+
+    findings = scan(tmp_path).findings
+
+    assert [f.rule.id for f in findings] == ["P001"]
+    assert "trust" in findings[0].detail
+
+
+def test_systemd_semicolon_inside_a_value_is_not_a_comment(tmp_path):
+    """systemd считает комментарием только строку, начинающуюся с '#'/';'."""
+    path = _write(
+        tmp_path / "app.service",
+        "[Service]\n"
+        'Environment="PATH=/usr/local/bin;/usr/bin"\n'
+        "ExecStart=/bin/sh -c 'setup ; run'\n",
+    )
+
+    service = parse_systemd_unit(path)["Service"]
+
+    assert service["Environment"] == '"PATH=/usr/local/bin;/usr/bin"'
+    assert service["ExecStart"] == "/bin/sh -c 'setup ; run'"
+
+
+def test_systemd_line_continuation_is_one_directive(tmp_path):
+    path = _write(
+        tmp_path / "app.service",
+        "[Service]\nExecStart=/bin/setup \\\n  --user=app\nUser=app\n",
+    )
+
+    service = parse_systemd_unit(path)["Service"]
+
+    assert service["ExecStart"] == "/bin/setup --user=app"
+    assert "--user" not in service
+
+
+@pytest.mark.parametrize("value", ["0", "ROOT", "root:root", "0:0"])
+def test_u001_recognises_every_form_of_root(value):
+    """C001 и D001 ловили uid 0 и регистр, U001 — нет."""
+    findings = systemd_checks.check_runs_as_root({"Service": {"User": value}})
+
+    assert len(findings) == 1
+
+
+def test_postgresql_conf_single_word_line_invents_nothing(tmp_path):
+    """'sslx' одним словом не должно читаться как ssl = x."""
+    path = _write(tmp_path / "postgresql.conf", "sslx\nssl = on\n")
+
+    settings = parse_postgresql_conf(path)
+
+    assert dict(settings) == {"ssl": "on"}
+
+
+def test_suppression_works_on_the_offending_directive_line(tmp_path):
+    """Комментарий над нарушающей директивой, а не только над сервисом.
+
+    Находки compose числились на строке объявления сервиса, поэтому
+    '# fstec-lint: ignore C005' рядом с 'ports' молча не срабатывал —
+    ровно так, как этот случай описан в документации.
+    """
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.4\n"
+        "    # fstec-lint: ignore C005\n"
+        "    ports:\n"
+        '      - "5432:5432"\n',
+    )
+
+    assert [f.rule.id for f in scan(tmp_path).findings if f.rule.id == "C005"] == []
+
+
+def test_suppression_next_to_a_list_item_works(tmp_path):
+    """Комментарий пишут не у ключа, а у конкретного порта в списке."""
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.4\n"
+        "    ports:\n"
+        '      - "5432:5432"   # fstec-lint: ignore C005\n',
+    )
+
+    assert [f.rule.id for f in scan(tmp_path).findings if f.rule.id == "C005"] == []
+
+
+def test_suppression_inline_after_the_directive_works(tmp_path):
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.4\n"
+        '    ports: ["5432:5432"]  # fstec-lint: ignore C005\n',
+    )
+
+    assert [f.rule.id for f in scan(tmp_path).findings if f.rule.id == "C005"] == []
+
+
+def test_suppression_does_not_leak_to_a_neighbouring_service(tmp_path):
+    """Область подавления — директива и сервис, а не весь файл."""
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  db:  # fstec-lint: ignore C005\n"
+        "    image: postgres:16.4\n"
+        "    ports:\n"
+        '      - "5432:5432"\n'
+        "  cache:\n"
+        "    image: redis:7.2\n"
+        "    ports:\n"
+        '      - "6379:6379"\n',
+    )
+
+    hits = [f.location for f in scan(tmp_path).findings if f.rule.id == "C005"]
+
+    assert hits == ["service:cache"]
+
+
+def test_suppression_on_the_service_header_still_covers_the_whole_service(tmp_path):
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n"
+        "  db:  # fstec-lint: ignore C005, C002\n"
+        "    image: postgres:16.4\n"
+        "    privileged: true\n"
+        "    ports:\n"
+        '      - "5432:5432"\n',
+    )
+
+    found = {f.rule.id for f in scan(tmp_path).findings}
+
+    assert "C005" not in found and "C002" not in found
+
+
+def test_findings_win_over_unreadable_files_in_the_exit_code(tmp_path, capsys):
+    """Код 3 не должен прятать нарушение.
+
+    Прогон с одним нечитаемым файлом и critical-находкой возвращал 3, и
+    гейт, различающий «нарушения» и «инструмент отработал не полностью»,
+    читал его как чистый.
+    """
+    _write(tmp_path / "Dockerfile", "FROM alpine:3.20\nRUN curl https://x | sh\nUSER app\n")
+    (tmp_path / "broken.service").write_bytes(b"\x00\xff\xfe")
+
+    code = main([str(tmp_path), "--fail-on", "critical"])
+
+    assert code == 1
+    assert "не удалось обработать: 1" in capsys.readouterr().err
+
+
+def test_unwritable_output_is_a_usage_error(tmp_path, capsys):
+    """Ошибка записи отчёта давала трейсбек и код 1 — как «есть нарушения»."""
+    _write(tmp_path / "Dockerfile", "FROM alpine:3.20\n")
+
+    code = main([str(tmp_path), "--fail-on", "none", "-o", str(tmp_path / "нет" / "r.txt")])
+
+    assert code == 2
+    assert "не удалось записать" in capsys.readouterr().err
+
+
+def test_a_crashing_check_does_not_discard_findings_of_other_rules(tmp_path, monkeypatch):
+    """Падение одной проверки уносило весь файл и звалось ошибкой разбора."""
+
+    def boom(_compose):
+        raise RuntimeError("сломалось")
+
+    monkeypatch.setitem(compose_checks.REGISTRY, "C002", boom)
+    _write(tmp_path / "docker-compose.yml", "services:\n  db:\n    image: postgres:latest\n")
+
+    result = scan(tmp_path)
+
+    assert {f.rule.id for f in result.findings}  # находки других правил уцелели
+    assert len(result.errors) == 1
+    assert "сбой проверки C002" in result.errors[0].message
+
+
+def test_compose_v1_is_reported_instead_of_passing_silently(tmp_path):
+    """Файл без секции services разбирался как пустой — «нарушений нет»."""
+    _write(tmp_path / "docker-compose.yml", "db:\n  image: postgres:latest\n  privileged: true\n")
+
+    result = scan(tmp_path)
+
+    assert result.findings == []
+    assert len(result.errors) == 1
+    assert "docker-compose v1" in result.errors[0].message
+
+
+@pytest.mark.parametrize("value", ["$$ecretPa55", "$ecret Pa55", "$1234pass"])
+def test_value_starting_with_a_dollar_but_not_a_reference_is_a_secret(value):
+    """Не всякое значение с '$' в начале — подстановка.
+
+    '$$' в compose экранирует сам знак, то есть '$$ecretPa55' — это
+    литерал '$ecretPa55'. Раньше проверка отбрасывала по одному первому
+    символу и такие значения пропускала.
+    """
+    compose = {"services": {"app": {"environment": {"DB_PASSWORD": value}}}}
+
+    assert len(compose_checks.check_secrets_in_environment(compose)) == 1
+
+
+@pytest.mark.parametrize("value", ["${DB_PASSWORD}", "$DB_PASSWORD", "${DB_PASSWORD:?required}"])
+def test_real_substitution_is_not_reported(value):
+    compose = {"services": {"app": {"environment": {"DB_PASSWORD": value}}}}
+
+    assert compose_checks.check_secrets_in_environment(compose) == []
+
+
+def test_truncated_dockerfile_location_stays_unique(tmp_path):
+    """Два разных длинных RUN с общим началом делили один адрес.
+
+    Адрес входит в отпечаток для baseline, поэтому одна запись глушила
+    обе находки.
+    """
+    prefix = "curl -sSL https://example.test/very/long/path/that/repeats"
+    _write(
+        tmp_path / "Dockerfile",
+        f"FROM alpine:3.20\nRUN {prefix}/one.sh | sh\nRUN {prefix}/two.sh | bash\nUSER app\n",
+    )
+
+    locations = {f.location for f in scan(tmp_path).findings if f.rule.id == "D005"}
+
+    assert len(locations) == 2
+
+
+def test_dockerfile_detail_is_a_single_line(tmp_path):
+    """Тело heredoc уезжало в detail как есть и рвало текстовый отчёт."""
+    _write(
+        tmp_path / "Dockerfile",
+        "FROM alpine:3.20\nRUN <<EOF\ncurl https://x.test/i.sh | sh\nEOF\nUSER app\n",
+    )
+
+    details = [f.detail for f in scan(tmp_path).findings if f.rule.id == "D005"]
+
+    assert details and all("\n" not in detail for detail in details)

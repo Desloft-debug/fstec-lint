@@ -6,12 +6,21 @@
 
 from __future__ import annotations
 
-from .base import CheckResult, config_line
+from .base import CheckResults, config_line
 
-OPEN_ADDRESSES = {"0.0.0.0/0", "::/0", "all", "samehost", "samenet"}
+OPEN_ADDRESSES = {
+    "0.0.0.0/0",
+    "::/0",
+    "all",
+    "samehost",
+    "samenet",
+    # Та же «любая сеть», записанная устаревшей формой «адрес маска».
+    "0.0.0.0 0.0.0.0",
+    ":: ::",
+}
 
 
-def check_trust_or_md5_auth(records: list[dict]) -> list[CheckResult]:
+def check_trust_or_md5_auth(records: list[dict]) -> CheckResults:
     findings = []
     for rec in records:
         method = (rec.get("method") or "").lower()
@@ -34,7 +43,7 @@ def check_trust_or_md5_auth(records: list[dict]) -> list[CheckResult]:
     return findings
 
 
-def check_open_hba_address(records: list[dict]) -> list[CheckResult]:
+def check_open_hba_address(records: list[dict]) -> CheckResults:
     findings = []
     for rec in records:
         addr = rec.get("address")
@@ -49,7 +58,7 @@ def check_open_hba_address(records: list[dict]) -> list[CheckResult]:
     return findings
 
 
-def check_listen_addresses(settings: dict) -> list[CheckResult]:
+def check_listen_addresses(settings: dict) -> CheckResults:
     value = settings.get("listen_addresses", "")
     if value == "*":
         return [
@@ -62,7 +71,7 @@ def check_listen_addresses(settings: dict) -> list[CheckResult]:
     return []
 
 
-def check_logging_disabled(settings: dict) -> list[CheckResult]:
+def check_logging_disabled(settings: dict) -> CheckResults:
     findings = []
     for key in ("log_connections", "log_disconnections"):
         value = settings.get(key, "off").lower()
@@ -77,7 +86,7 @@ def check_logging_disabled(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_ssl_disabled(settings: dict) -> list[CheckResult]:
+def check_ssl_disabled(settings: dict) -> CheckResults:
     value = settings.get("ssl", "off").lower()
     if value != "on":
         return [
@@ -90,7 +99,7 @@ def check_ssl_disabled(settings: dict) -> list[CheckResult]:
     return []
 
 
-def check_password_encryption(settings: dict) -> list[CheckResult]:
+def check_password_encryption(settings: dict) -> CheckResults:
     value = settings.get("password_encryption", "md5").lower()
     if value != "scram-sha-256":
         return [
@@ -103,7 +112,7 @@ def check_password_encryption(settings: dict) -> list[CheckResult]:
     return []
 
 
-def check_statement_logging_disabled(settings: dict) -> list[CheckResult]:
+def check_statement_logging_disabled(settings: dict) -> CheckResults:
     value = settings.get("log_statement", "none").lower()
     if value not in ("ddl", "mod", "all"):
         return [
@@ -117,7 +126,7 @@ def check_statement_logging_disabled(settings: dict) -> list[CheckResult]:
     return []
 
 
-def check_missing_statement_timeout(settings: dict) -> list[CheckResult]:
+def check_missing_statement_timeout(settings: dict) -> CheckResults:
     value = settings.get("statement_timeout", "0").strip()
     if value in ("0", "0ms", "0s", "0min", "0h", "0d", ""):
         return [

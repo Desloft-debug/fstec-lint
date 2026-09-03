@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 
-from .base import CheckResult
+from .base import CheckResult, CheckResults, is_root_user
 
 SECRET_ARG_RE = re.compile(
     r"(PASSWORD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)", re.IGNORECASE
 )
 PIPE_TO_SHELL_RE = re.compile(r"(curl|wget)\b.*\|\s*(sh|bash|python[0-9.]*)\b", re.IGNORECASE)
-ROOT_UIDS = {"root", "0"}
 MAX_LOCATION_ARGS = 60
 
 
@@ -106,14 +106,28 @@ def _loc(stage: Stage, suffix: str) -> str:
     return f"{stage.label}: {suffix}"
 
 
+def _normalize(args: str) -> str:
+    """Аргументы в одну строку: тело heredoc содержит переводы строк.
+
+    Без этого многострочный RUN уезжал в поле detail как есть и рвал
+    построчный текстовый отчёт (и строку в JSON) на несколько.
+    """
+    return " ".join(args.split())
+
+
 def _short(args: str) -> str:
-    args = " ".join(args.split())
-    return args if len(args) <= MAX_LOCATION_ARGS else args[:MAX_LOCATION_ARGS] + "…"
+    """Короткий адрес находки, устойчивый к совпадению префиксов.
 
-
-def _is_root_user(value: str) -> bool:
-    uid = value.strip().strip("\"'").split(":", 1)[0].strip().lower()
-    return uid in ROOT_UIDS
+    Усечение по 60 символам входит в отпечаток для baseline, поэтому две
+    разные длинные команды с общим началом получали один адрес и одна
+    запись baseline глушила обе. К усечённой форме добавляется хеш
+    полного текста — адрес остаётся читаемым и остаётся уникальным.
+    """
+    args = _normalize(args)
+    if len(args) <= MAX_LOCATION_ARGS:
+        return args
+    digest = hashlib.sha256(args.encode("utf-8")).hexdigest()[:8]
+    return f"{args[:MAX_LOCATION_ARGS]}…#{digest}"
 
 
 def _effective_user(stage: Stage, stages: list[Stage], seen: set[int] | None = None) -> str | None:
@@ -137,7 +151,7 @@ def _effective_user(stage: Stage, stages: list[Stage], seen: set[int] | None = N
     return None
 
 
-def check_missing_user(instructions: list[dict]) -> list[CheckResult]:
+def check_missing_user(instructions: list[dict]) -> CheckResults:
     stages = _stages(instructions)
     build_stages = _build_stages(stages)
     if not build_stages:
@@ -154,7 +168,7 @@ def check_missing_user(instructions: list[dict]) -> list[CheckResult]:
                 final.from_line,
             )
         ]
-    if _is_root_user(user):
+    if is_root_user(user):
         return [
             (
                 _loc(final, "USER"),
@@ -165,7 +179,7 @@ def check_missing_user(instructions: list[dict]) -> list[CheckResult]:
     return []
 
 
-def check_add_remote_url(instructions: list[dict]) -> list[CheckResult]:
+def check_add_remote_url(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
         for inst in stage.instructions:
@@ -176,14 +190,15 @@ def check_add_remote_url(instructions: list[dict]) -> list[CheckResult]:
                 findings.append(
                     (
                         _loc(stage, f"ADD {_short(inst['args'])}"),
-                        f"ADD {inst['args']} — загрузка по URL без проверки контрольной суммы",
+                        f"ADD {_normalize(inst['args'])} — загрузка по URL "
+                        "без проверки контрольной суммы",
                         inst["line"],
                     )
                 )
     return findings
 
 
-def check_secret_build_arg(instructions: list[dict]) -> list[CheckResult]:
+def check_secret_build_arg(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
         for inst in stage.instructions:
@@ -202,7 +217,7 @@ def check_secret_build_arg(instructions: list[dict]) -> list[CheckResult]:
     return findings
 
 
-def check_latest_base_image(instructions: list[dict]) -> list[CheckResult]:
+def check_latest_base_image(instructions: list[dict]) -> CheckResults:
     findings: list[CheckResult] = []
     build_stages = _build_stages(_stages(instructions))
     for position, stage in enumerate(build_stages):
@@ -225,7 +240,7 @@ def check_latest_base_image(instructions: list[dict]) -> list[CheckResult]:
     return findings
 
 
-def check_pipe_to_shell(instructions: list[dict]) -> list[CheckResult]:
+def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
         for inst in stage.instructions:
@@ -235,7 +250,7 @@ def check_pipe_to_shell(instructions: list[dict]) -> list[CheckResult]:
                 findings.append(
                     (
                         _loc(stage, f"RUN {_short(inst['args'])}"),
-                        f"RUN {inst['args'][:80]} — вывод curl/wget передаётся "
+                        f"RUN {_short(inst['args'])} — вывод curl/wget передаётся "
                         "напрямую в shell без проверки",
                         inst["line"],
                     )
@@ -243,7 +258,7 @@ def check_pipe_to_shell(instructions: list[dict]) -> list[CheckResult]:
     return findings
 
 
-def check_missing_healthcheck(instructions: list[dict]) -> list[CheckResult]:
+def check_missing_healthcheck(instructions: list[dict]) -> CheckResults:
     if not instructions:
         return []
     if any(i["instruction"] == "HEALTHCHECK" for i in instructions):

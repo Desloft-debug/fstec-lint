@@ -7,7 +7,7 @@ from pathlib import Path
 from . import __version__
 from . import baseline as baseline_module
 from .engine import filter_rules, load_rules, scan, unknown_patterns
-from .models import Severity
+from .models import Rule, Severity
 from .reporters import html, json_reporter, rules_catalog, sarif, text
 
 
@@ -95,29 +95,52 @@ def _rule_patterns(values: list[str]) -> list[str]:
     return [token.strip() for value in values for token in value.split(",") if token.strip()]
 
 
-def _warn_unknown(rules, patterns: list[str], option: str) -> None:
-    for pattern in unknown_patterns(rules, patterns):
+def _report_unknown(rules: list[Rule], patterns: list[str], option: str) -> bool:
+    """Печатает нераспознанные шаблоны правил. True, если такие были.
+
+    Опечатка в --select раньше давала «нарушений не найдено» и код 0:
+    прогон, не проверивший ничего, выглядел как успешный аудит. Теперь
+    это код 2 — ошибка вызова.
+    """
+    unknown = unknown_patterns(rules, patterns)
+    for pattern in unknown:
         print(
             f"fstec-lint: {option} {pattern} — нет правил с таким id",
             file=sys.stderr,
         )
+    return bool(unknown)
+
+
+class UsageError(Exception):
+    """Ошибка вызова: неверные аргументы или недоступный путь (код 2)."""
 
 
 def _write(output: str, destination: str | None) -> None:
-    if destination:
-        Path(destination).write_text(output + "\n", encoding="utf-8")
-    else:
+    """Пишет отчёт в файл или в stdout.
+
+    Ошибка записи — это ошибка вызова (код 2), а не находка: раньше
+    несуществующий каталог в --output давал трейсбек и код 1, то есть
+    ровно тот же код, что «найдены нарушения выше порога».
+    """
+    if not destination:
         print(output)
+        return
+    try:
+        Path(destination).write_text(output + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"не удалось записать {destination}: {exc.strerror or exc}") from exc
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None) -> int:
     args = build_parser().parse_args(argv)
 
     select = _rule_patterns(args.select)
     ignore = _rule_patterns(args.ignore)
     all_rules = load_rules()
-    _warn_unknown(all_rules, select, "--select")
-    _warn_unknown(all_rules, ignore, "--ignore")
+    unknown = _report_unknown(all_rules, select, "--select")
+    unknown |= _report_unknown(all_rules, ignore, "--ignore")
+    if unknown:
+        return 2
 
     if args.list_rules:
         rules = filter_rules(all_rules, select, ignore)
@@ -142,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     findings = result.findings
 
     for error in result.errors:
-        print(f"fstec-lint: не удалось разобрать {error.file}: {error.message}", file=sys.stderr)
+        print(f"fstec-lint: {error.file}: {error.message}", file=sys.stderr)
 
     if result.suppressed:
         print(
@@ -151,21 +174,25 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.write_baseline:
-        Path(args.write_baseline).write_text(
-            baseline_module.render(findings) + "\n", encoding="utf-8"
-        )
+        _write(baseline_module.render(findings), args.write_baseline)
         print(
             f"fstec-lint: в baseline записано находок: {len(findings)} ({args.write_baseline})",
             file=sys.stderr,
         )
-        return 3 if result.errors else 0
+        if result.errors:
+            print(
+                f"fstec-lint: часть файлов не прочитана ({len(result.errors)}) — "
+                "baseline записан по неполному прогону",
+                file=sys.stderr,
+            )
+            return 3
+        return 0
 
     if args.baseline:
         try:
             known = baseline_module.load(Path(args.baseline))
         except baseline_module.BaselineError as exc:
-            print(f"fstec-lint: {exc}", file=sys.stderr)
-            return 2
+            raise UsageError(str(exc)) from exc
         findings, suppressed = baseline_module.apply(findings, known)
         if suppressed:
             print(f"fstec-lint: подавлено baseline-ом: {suppressed}", file=sys.stderr)
@@ -181,22 +208,31 @@ def main(argv: list[str] | None = None) -> int:
 
     _write(output, args.output)
 
-    # Код 3 отдельно от 1: «инструмент не смог прочитать часть файлов» —
-    # это не то же самое, что «нарушения найдены», и чинится по-разному.
     if result.errors:
         print(
-            f"fstec-lint: файлов не удалось разобрать: {len(result.errors)}",
+            f"fstec-lint: файлов не удалось обработать: {len(result.errors)}",
             file=sys.stderr,
         )
-        return 3
 
-    if args.fail_on == "none":
-        return 0
+    # Порог считается ПЕРЕД кодом 3. Код 3 отдельно от 1 нужен, чтобы
+    # «инструмент не прочитал часть файлов» не путали с «нарушения
+    # найдены», но приоритет у нарушения: прогон с одним битым файлом и
+    # critical-находкой возвращал 3, и гейт, различающий эти коды, читал
+    # его как чистый.
+    if args.fail_on != "none":
+        threshold = Severity.from_str(args.fail_on)
+        if any(finding.rule.severity >= threshold for finding in findings):
+            return 1
 
-    threshold = Severity.from_str(args.fail_on)
-    if any(finding.rule.severity >= threshold for finding in findings):
-        return 1
-    return 0
+    return 3 if result.errors else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _run(argv)
+    except UsageError as exc:
+        print(f"fstec-lint: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

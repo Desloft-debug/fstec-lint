@@ -1,5 +1,5 @@
 name: "fstec-lint"
-description: "Статический аудит Docker/PostgreSQL конфигураций с привязкой к мерам ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
+description: "Статический аудит Docker/Dockerfile/PostgreSQL/sshd/systemd конфигураций с привязкой к мерам ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
 author: "Desloft-debug"
 branding:
   icon: "shield"
@@ -34,10 +34,21 @@ runs:
     - name: Install fstec-lint
       shell: bash
       # Ставим ту же ревизию, с которой вызван сам Action: без этого
-      # 'uses: ...@v0.8.1' закрепляет обёртку, а инструмент всё равно
-      # приезжает с HEAD и прогон перестаёт быть воспроизводимым.
+      # 'uses: ...@v0.9.0' закрепляет обёртку, а инструмент всё равно
+      # приезжал бы с HEAD и прогон перестал бы быть воспроизводимым.
+      #
+      # Пустой action_ref означает вызов из локального пути (./), где
+      # ревизии нет — тогда ставим из самого чекаута, а не из 'main':
+      # молча подменять версию инструмента нельзя.
       run: |
-        pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@${{ github.action_ref || 'main' }}"
+        set -eu
+        ref="${{ github.action_ref }}"
+        if [ -n "$ref" ]; then
+          pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@${ref}"
+        else
+          pip install "${{ github.action_path }}"
+        fi
+        fstec-lint --version
 
     - name: Run fstec-lint
       shell: bash

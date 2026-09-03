@@ -9,3 +9,6 @@ venv/
 fstec-lint-report.*
 .idea/
 .vscode/
+.coverage
+.coverage.*
+htmlcov/

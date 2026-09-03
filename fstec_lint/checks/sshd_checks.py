@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .base import CheckResult, config_line
+from .base import CheckResults, config_line
 
 
 def _values(settings: dict, key: str, default: str) -> Iterator[tuple[str, str, int | None]]:
@@ -26,7 +26,7 @@ def _values(settings: dict, key: str, default: str) -> Iterator[tuple[str, str, 
             )
 
 
-def check_permit_root_login(settings: dict) -> list[CheckResult]:
+def check_permit_root_login(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "permitrootlogin", "prohibit-password"):
         value = raw.lower()
@@ -41,7 +41,7 @@ def check_permit_root_login(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_password_authentication(settings: dict) -> list[CheckResult]:
+def check_password_authentication(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "passwordauthentication", "yes"):
         if raw.lower() == "yes":
@@ -56,7 +56,7 @@ def check_password_authentication(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_permit_empty_passwords(settings: dict) -> list[CheckResult]:
+def check_permit_empty_passwords(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "permitemptypasswords", "no"):
         if raw.lower() == "yes":
@@ -70,7 +70,7 @@ def check_permit_empty_passwords(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_weak_protocol(settings: dict) -> list[CheckResult]:
+def check_weak_protocol(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "protocol", "2"):
         if "1" in raw.split(","):
@@ -84,7 +84,7 @@ def check_weak_protocol(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_x11_forwarding(settings: dict) -> list[CheckResult]:
+def check_x11_forwarding(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "x11forwarding", "no"):
         if raw.lower() == "yes":
@@ -98,7 +98,7 @@ def check_x11_forwarding(settings: dict) -> list[CheckResult]:
     return findings
 
 
-def check_max_auth_tries(settings: dict) -> list[CheckResult]:
+def check_max_auth_tries(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "maxauthtries", "6"):
         try:
