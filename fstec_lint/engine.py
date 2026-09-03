@@ -100,6 +100,8 @@ def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
                     submeasure_title=item.get("submeasure_title", ""),
                     activity=item.get("activity", ""),
                     activity_title=item.get("activity_title", ""),
+                    cwe=item.get("cwe", ""),
+                    weakness_type=item.get("weakness_type", ""),
                     legacy_measure=item.get("legacy_measure", ""),
                 )
             )

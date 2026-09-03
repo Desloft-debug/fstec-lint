@@ -8,7 +8,7 @@ from . import __version__
 from . import baseline as baseline_module
 from .engine import filter_rules, load_rules, scan, unknown_patterns
 from .models import Rule, Severity
-from .reporters import html, json_reporter, rules_catalog, sarif, text
+from .reporters import html, json_reporter, passport, rules_catalog, sarif, text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,9 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f",
         "--format",
-        choices=["text", "json", "html", "sarif"],
+        choices=["text", "json", "html", "sarif", "passport"],
         default="text",
-        help="формат отчёта",
+        help=("формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015 (приложение А)"),
     )
     parser.add_argument("-o", "--output", help="файл для сохранения отчёта (по умолчанию — stdout)")
     parser.add_argument(
@@ -203,6 +203,8 @@ def _run(argv: list[str] | None) -> int:
         output = html.render(findings, title=f"fstec-lint report — {root.name}")
     elif args.format == "sarif":
         output = sarif.render(findings)
+    elif args.format == "passport":
+        output = passport.render(findings)
     else:
         output = text.render(findings)
 
