@@ -26,13 +26,26 @@ SEVERITY_LABEL = {
     Severity.LOW: "LOW ",
 }
 
-# "ЗСВ.2 / УПД.4" -> ЗСВ, УПД
-_MEASURE_GROUP_RE = re.compile(r"([А-ЯЁ]{2,})")
+# "п. 63 д)" -> ("п. 63", "д"); "п. 34 б)" -> ("п. 34", "б")
+_CLAUSE_RE = re.compile(r"п\.\s*(\d+)\s*([а-яё])\)")
+
+# Пункты приказа ФСТЭК N 117, на которые ссылаются правила.
+CLAUSE_LABELS = {
+    "63": "п. 63 — базовые меры защиты",
+    "34": "п. 34 — мероприятия по защите информации",
+}
 
 
 def measure_groups(rule: Rule) -> list[str]:
-    """Коды групп мер, затронутых правилом, без номеров внутри группы."""
-    return list(dict.fromkeys(_MEASURE_GROUP_RE.findall(rule.measure)))
+    """Пункты приказа N 117, затронутые правилом.
+
+    Раньше здесь вырезались коды групп вида ЗСВ/УПД из приказа N 17. В
+    приказе N 117 таких кодов нет, поэтому покрытие считается по его
+    пунктам — так его можно проверить по тексту приказа, а не по памяти.
+    """
+    return [f"п. {number} {letter})" for number, letter in _CLAUSE_RE.findall(rule.measure)] or [
+        rule.measure
+    ]
 
 
 def _coverage(rules: list[Rule]) -> Counter:
@@ -60,7 +73,7 @@ def render_text(rules: list[Rule]) -> str:
 
     coverage = _coverage(rules)
     summary = ", ".join(f"{group} ({count})" for group, count in sorted(coverage.items()))
-    lines.append(f"Затронутые группы мер ФСТЭК: {summary}")
+    lines.append(f"Затронутые пункты приказа ФСТЭК N 117: {summary}")
     return "\n".join(lines)
 
 
@@ -77,6 +90,7 @@ def render_json(rules: list[Rule]) -> str:
                 "measure": rule.measure,
                 "measure_title": rule.measure_title,
                 "measure_groups": measure_groups(rule),
+                "legacy_measure": rule.legacy_measure,
                 "orders": rule.orders,
                 "description": rule.description,
                 "remediation": rule.remediation,

@@ -31,6 +31,10 @@ class Rule:
     remediation: str
     target: str
     orders: str = ""
+    # Код меры по приказу N 17 (утратил силу 01.03.2026). Хранится как
+    # история миграции, а не как утверждение о соответствии: в приказе
+    # N 117 кодов такого вида нет.
+    legacy_measure: str = ""
 
 
 @dataclass(frozen=True)
