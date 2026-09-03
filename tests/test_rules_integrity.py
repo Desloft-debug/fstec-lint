@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from fstec_lint import measures
+from fstec_lint import measures, terms
 from fstec_lint.checks import (
     compose_checks,
     dockerfile_checks,
@@ -187,3 +187,18 @@ def test_logging_and_channel_rules_are_not_swapped():
     assert subs["P004"] == "РСБ.1"
     assert subs["P007"] == "РСБ.1"
     assert subs["P005"] == "ЗКС.1"
+
+
+def test_gost_terms_used_in_rules_are_defined():
+    """Термин ГОСТа в тексте правила должен быть выписан в terms.py.
+
+    Предмет группы ЗКО задан приказом N 117 через ГОСТ Р 70860-2023,
+    поэтому ссылки на его пункты — часть нормативной привязки, а не
+    украшение: они должны указывать на существующее определение.
+    """
+    text = " ".join(f"{rule.description} {rule.remediation}" for rule in load_rules())
+    cited = set(re.findall(r"ГОСТ Р 70860-2023,\s*п\.\s*(\d+\.\d+)", text))
+    known = {clause for clause, _ in terms.DEFINITIONS.values()}
+
+    assert cited, "ни одно правило не ссылается на ГОСТ — проверка потеряла смысл"
+    assert cited <= known, f"ссылки на неописанные пункты ГОСТа: {sorted(cited - known)}"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fstec-lint"
-version = "1.1.0"
+version = "1.2.0"
 description = "Статический аудит Docker/Dockerfile/PostgreSQL/sshd/systemd инфраструктуры с привязкой находок к мерам защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
 readme = "README.md"
 requires-python = ">=3.10"
