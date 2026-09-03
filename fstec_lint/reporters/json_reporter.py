@@ -15,6 +15,7 @@ def render(findings: list[Finding]) -> str:
             "measure_title": finding.rule.measure_title,
             "orders": finding.rule.orders,
             "file": finding.file,
+            "line": finding.line,
             "location": finding.location,
             "detail": finding.detail,
             "remediation": finding.rule.remediation,

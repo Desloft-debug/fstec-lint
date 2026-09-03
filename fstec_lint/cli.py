@@ -45,6 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="показать каталог правил и покрытие групп мер ФСТЭК, ничего не сканируя",
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help=(
+            "не сканировать файлы и каталоги, подходящие под glob "
+            "(можно повторять). Служебные каталоги вроде .git, node_modules "
+            "и .venv исключены всегда"
+        ),
+    )
+    parser.add_argument(
         "--baseline",
         metavar="FILE",
         help="не сообщать о находках, перечисленных в baseline-файле (падать только на новых)",
@@ -80,7 +91,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fstec-lint: путь не найден: {root}", file=sys.stderr)
         return 2
 
-    findings = scan(root)
+    result = scan(root, exclude=args.exclude)
+    findings = result.findings
+
+    for error in result.errors:
+        print(f"fstec-lint: не удалось разобрать {error.file}: {error.message}", file=sys.stderr)
 
     if args.write_baseline:
         Path(args.write_baseline).write_text(
@@ -90,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             f"fstec-lint: в baseline записано находок: {len(findings)} ({args.write_baseline})",
             file=sys.stderr,
         )
-        return 0
+        return 3 if result.errors else 0
 
     if args.baseline:
         try:
@@ -112,6 +127,15 @@ def main(argv: list[str] | None = None) -> int:
         output = text.render(findings)
 
     _write(output, args.output)
+
+    # Код 3 отдельно от 1: «инструмент не смог прочитать часть файлов» —
+    # это не то же самое, что «нарушения найдены», и чинится по-разному.
+    if result.errors:
+        print(
+            f"fstec-lint: файлов не удалось разобрать: {len(result.errors)}",
+            file=sys.stderr,
+        )
+        return 3
 
     if args.fail_on == "none":
         return 0

@@ -167,3 +167,42 @@ def test_sensitive_host_mount_flagged():
 def test_regular_volume_mount_ok():
     compose = {"services": {"web": {"volumes": ["./data:/app/data"]}}}
     assert cc.check_sensitive_host_mount(compose) == []
+
+
+def test_explicit_root_user_flagged():
+    compose = {"services": {"web": {"user": "root"}}}
+    findings = cc.check_root_user(compose)
+    assert len(findings) == 1
+    assert "явно запущен от root" in findings[0][1]
+
+
+def test_explicit_uid_zero_flagged():
+    for value in ("0", 0, "0:0", "root:root"):
+        compose = {"services": {"web": {"user": value}}}
+        assert len(cc.check_root_user(compose)) == 1, value
+
+
+def test_non_root_uid_ok():
+    for value in ("1000", 1000, "1000:1000", "appuser"):
+        compose = {"services": {"web": {"user": value}}}
+        assert cc.check_root_user(compose) == [], value
+
+
+def test_exposed_port_range_flagged():
+    compose = {"services": {"db": {"ports": ["5432-5433:5432-5433"]}}}
+    assert len(cc.check_exposed_sensitive_ports(compose)) == 1
+
+
+def test_exposed_ipv6_wildcard_flagged():
+    compose = {"services": {"db": {"ports": ["[::]:5432:5432"]}}}
+    assert len(cc.check_exposed_sensitive_ports(compose)) == 1
+
+
+def test_ipv6_loopback_binding_ok():
+    compose = {"services": {"db": {"ports": ["[::1]:5432:5432"]}}}
+    assert cc.check_exposed_sensitive_ports(compose) == []
+
+
+def test_bare_env_variable_reference_not_flagged():
+    compose = {"services": {"db": {"environment": {"DB_PASSWORD": "$DB_PASSWORD"}}}}
+    assert cc.check_secrets_in_environment(compose) == []

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .models import Finding
 
-BASELINE_VERSION = 1
+BASELINE_VERSION = 2
 
 
 class BaselineError(Exception):

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable, Iterable, Mapping
+import os
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
+from .checks.base import CheckResult
 from .models import Finding, Rule, Severity
 from .parsers.compose import parse_compose
 from .parsers.dockerfile import parse_dockerfile
@@ -29,7 +32,43 @@ SSHD_CONFIG_PATTERNS = ("sshd_config",)
 SYSTEMD_UNIT_PATTERNS = ("*.service",)
 DOCKERFILE_PATTERNS = ("Dockerfile", "Dockerfile.*", "*.dockerfile")
 
-CheckFn = Callable[[Any], list[tuple[str, str]]]
+# Каталоги со сторонним и служебным содержимым: конфиги внутри них не
+# наши и правятся не нами, а на большом репозитории они дают основную
+# массу шума и времени обхода.
+DEFAULT_EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".tox",
+        ".venv",
+        "venv",
+        "node_modules",
+        "vendor",
+        "site-packages",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".terraform",
+    }
+)
+
+CheckFn = Callable[[Any], list[CheckResult]]
+
+
+@dataclass(frozen=True)
+class ScanError:
+    """Файл, который не удалось разобрать: битый синтаксис, не UTF-8, нет прав."""
+
+    file: str
+    message: str
+
+
+@dataclass
+class ScanResult:
+    findings: list[Finding] = field(default_factory=list)
+    errors: list[ScanError] = field(default_factory=list)
 
 
 def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
@@ -57,7 +96,35 @@ def _matches_any(name: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
-def discover_files(root: Path) -> dict[str, list[Path]]:
+def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
+    """Исключение задаётся либо именем каталога/файла, либо glob-ом по пути."""
+    return _matches_any(name, patterns) or _matches_any(relative, patterns)
+
+
+def _candidate_files(root: Path, exclude: Sequence[str]) -> list[Path]:
+    if root.is_file():
+        return [root]
+
+    candidates: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        # Обрезаем дерево на месте: в node_modules и .git незачем заходить.
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in DEFAULT_EXCLUDED_DIRS
+            and not _is_excluded(d, (current / d).relative_to(root).as_posix(), exclude)
+        ]
+        dirnames.sort()
+        for filename in sorted(filenames):
+            path = current / filename
+            if _is_excluded(filename, path.relative_to(root).as_posix(), exclude):
+                continue
+            candidates.append(path)
+    return candidates
+
+
+def discover_files(root: Path, exclude: Sequence[str] = ()) -> dict[str, list[Path]]:
     found: dict[str, list[Path]] = {
         "compose": [],
         "pg_hba": [],
@@ -66,12 +133,8 @@ def discover_files(root: Path) -> dict[str, list[Path]]:
         "systemd_unit": [],
         "dockerfile": [],
     }
-    if root.is_file():
-        candidates = [root]
-    else:
-        candidates = [p for p in root.rglob("*") if p.is_file()]
 
-    for path in candidates:
+    for path in _candidate_files(root, exclude):
         name = path.name
         if _matches_any(name, COMPOSE_FILE_PATTERNS):
             found["compose"].append(path)
@@ -89,75 +152,52 @@ def discover_files(root: Path) -> dict[str, list[Path]]:
 
 
 def _run_registry(
-    findings: list[Finding],
+    result: ScanResult,
     paths: list[Path],
     rules: list[Rule],
     registry: Mapping[str, CheckFn],
     parse: Callable[[Path], Any],
 ) -> None:
     for path in paths:
-        data = parse(path)
-        for rule in rules:
-            check_fn = registry.get(rule.id)
-            if check_fn is None:
-                continue
-            for location, detail in check_fn(data):
-                findings.append(
-                    Finding(rule=rule, file=str(path), location=location, detail=detail)
-                )
+        # Один битый или бинарный файл не должен ронять весь прогон:
+        # имя файла с расширением .service ещё не гарантирует, что внутри
+        # текстовый юнит systemd.
+        try:
+            data = parse(path)
+            file_findings = [
+                Finding(rule=rule, file=str(path), location=location, detail=detail, line=line)
+                for rule in rules
+                if (check_fn := registry.get(rule.id)) is not None
+                for location, detail, line in check_fn(data)
+            ]
+        except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
+            result.errors.append(
+                ScanError(file=str(path), message=" ".join(f"{type(exc).__name__}: {exc}".split()))
+            )
+            continue
+        result.findings.extend(file_findings)
 
 
-def scan(root: Path, rules_dir: Path = RULES_DIR) -> list[Finding]:
-    """Сканирует каталог root и возвращает список находок, отсортированных по убыванию severity."""
+def scan(root: Path, rules_dir: Path = RULES_DIR, exclude: Sequence[str] = ()) -> ScanResult:
+    """Сканирует root и возвращает находки (по убыванию severity) и ошибки разбора."""
     rules_by_target: dict[str, list[Rule]] = {}
     for rule in load_rules(rules_dir):
         rules_by_target.setdefault(rule.target, []).append(rule)
 
-    files = discover_files(root)
-    findings: list[Finding] = []
+    files = discover_files(root, exclude)
+    result = ScanResult()
 
-    _run_registry(
-        findings,
-        files["compose"],
-        rules_by_target.get("compose", []),
-        compose_checks.REGISTRY,
-        parse_compose,
-    )
-    _run_registry(
-        findings,
-        files["postgresql_conf"],
-        rules_by_target.get("postgresql_conf", []),
-        postgres_checks.POSTGRESQL_CONF_REGISTRY,
-        parse_postgresql_conf,
-    )
-    _run_registry(
-        findings,
-        files["pg_hba"],
-        rules_by_target.get("pg_hba", []),
-        postgres_checks.PG_HBA_REGISTRY,
-        parse_pg_hba,
-    )
-    _run_registry(
-        findings,
-        files["sshd_config"],
-        rules_by_target.get("sshd_config", []),
-        sshd_checks.REGISTRY,
-        parse_sshd_config,
-    )
-    _run_registry(
-        findings,
-        files["systemd_unit"],
-        rules_by_target.get("systemd_unit", []),
-        systemd_checks.REGISTRY,
-        parse_systemd_unit,
-    )
-    _run_registry(
-        findings,
-        files["dockerfile"],
-        rules_by_target.get("dockerfile", []),
-        dockerfile_checks.REGISTRY,
-        parse_dockerfile,
-    )
+    registries: list[tuple[str, Mapping[str, CheckFn], Callable[[Path], Any]]] = [
+        ("compose", compose_checks.REGISTRY, parse_compose),
+        ("postgresql_conf", postgres_checks.POSTGRESQL_CONF_REGISTRY, parse_postgresql_conf),
+        ("pg_hba", postgres_checks.PG_HBA_REGISTRY, parse_pg_hba),
+        ("sshd_config", sshd_checks.REGISTRY, parse_sshd_config),
+        ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
+        ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
+    ]
+    for target, registry, parse in registries:
+        _run_registry(result, files[target], rules_by_target.get(target, []), registry, parse)
 
-    findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id))
-    return findings
+    result.findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id, f.location))
+    result.errors.sort(key=lambda e: e.file)
+    return result

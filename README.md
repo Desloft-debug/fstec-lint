@@ -63,7 +63,7 @@ sshd_config, юниты systemd) с привязкой каждого из **40 
 
 | Правило | Проблема | Мера ФСТЭК |
 |---|---|---|
-| C001 | Контейнер без `user:` — работает от root | УПД.4 / ЗСВ.2 |
+| C001 | Контейнер без `user:` либо с `user: root` — работает от root | УПД.4 / ЗСВ.2 |
 | C002 | `privileged: true` | ЗСВ.2 / УПД.4 |
 | C003 | Опасные `cap_add` (`SYS_ADMIN`, `NET_ADMIN`, `ALL`...) | ЗСВ.2 |
 | C004 | Пароль/токен в открытом виде в `environment` | ЗНИ.1 / ИАФ.1 |
@@ -117,7 +117,7 @@ sshd_config, юниты systemd) с привязкой каждого из **40 
 
 | Правило | Проблема | Мера ФСТЭК |
 |---|---|---|
-| D001 | В финальном стейдже нет `USER` | УПД.4 / ЗСВ.2 |
+| D001 | В финальном стейдже нет `USER` либо это `USER root` | УПД.4 / ЗСВ.2 |
 | D002 | `ADD` загружает файл по URL без проверки | ОЦЛ.1 / АНЗ.1 |
 | D003 | Секрет передан через `ARG` | ЗНИ.1 / ИАФ.1 |
 | D004 | Базовый образ (`FROM`) не закреплён по версии | ОЦЛ.1 / АНЗ.1 |
@@ -157,12 +157,32 @@ fstec-lint --list-rules           # каталог правил, без скан
 
 fstec-lint . --write-baseline .fstec-lint-baseline.json   # зафиксировать текущий долг
 fstec-lint . --baseline .fstec-lint-baseline.json         # падать только на новых находках
+
+fstec-lint . --exclude "tests/fixtures/*" --exclude legacy  # не сканировать своё
 ```
 
 `fstec-lint` рекурсивно ищет `docker-compose*.yml`, `Dockerfile`,
 `postgresql.conf`, `pg_hba.conf`, `sshd_config` и `*.service` в указанном
-каталоге. По умолчанию команда завершается кодом `1`, если найдена хотя
-бы одна находка severity `high` или выше — это удобно для CI.
+каталоге. Служебные и сторонние каталоги (`.git`, `node_modules`,
+`vendor`, `.venv`, `site-packages`, `__pycache__`, кеши линтеров,
+`.terraform`) пропускаются всегда — чужие конфиги правятся не вами и
+только создают шум. Всё остальное исключается через `--exclude` (glob по
+имени или по пути относительно корня сканирования, флаг можно повторять).
+
+### Коды выхода
+
+| Код | Что означает                                                        |
+|-----|---------------------------------------------------------------------|
+| `0` | находок выше порога `--fail-on` нет                                 |
+| `1` | есть находки severity `--fail-on` или выше (по умолчанию `high`)    |
+| `2` | ошибка вызова: путь не найден, baseline отсутствует или повреждён   |
+| `3` | часть файлов не удалось разобрать — инструмент отработал не полностью |
+
+Код `3` намеренно отделён от `1`: битый YAML, не-UTF-8 файл с расширением
+`.service` или отсутствие прав — это проблема прогона, а не проекта, и
+чинится она иначе, чем находка. Такой файл пропускается с сообщением в
+stderr, остальные проверяются как обычно — один мусорный файл не роняет
+весь скан.
 
 ### Каталог правил
 
@@ -218,9 +238,11 @@ fstec-lint: подавлено baseline-ом: 47
 
 Находка опознаётся по тройке «правило + файл + место» (например,
 `C015 | docker-compose.yml | service:db`), пути хранятся относительными —
-чтобы файл работал одинаково на машине разработчика и в CI. Текст
-описания в отпечаток не входит: правки формулировок в правилах не должны
-внезапно «воскрешать» весь зафиксированный долг. Файл отсортирован и
+чтобы файл работал одинаково на машине разработчика и в CI. Ни текст
+описания, ни номер строки в отпечаток не входят: ни правки формулировок в
+правилах, ни вставка строки выше по файлу не должны внезапно «воскрешать»
+весь зафиксированный долг. Номер строки при этом никуда не делся — он
+живёт в отдельном поле находки и попадает в отчёты. Файл отсортирован и
 детерминирован, поэтому его диффы читаемы на ревью — видно ровно то, что
 добавили или разобрали.
 
@@ -280,8 +302,8 @@ $ fstec-lint examples/vulnerable-stack --fail-on none
        фикс: Заведите отдельного системного пользователя (User=<имя>).
 
 [CRIT] D005 curl/wget передаётся напрямую в shell
-       файл: examples/vulnerable-stack/Dockerfile
-       где:  Dockerfile:5: RUN
+       файл: examples/vulnerable-stack/Dockerfile:6
+       где:  stage 1: RUN curl -sSL https://get.example.com/install.sh | bash
        мера: ОЦЛ.1 / АНЗ.1 — Обеспечение целостности / Анализ уязвимостей
        факт: RUN curl -sSL https://get.example.com/install.sh | bash —
              вывод curl/wget передаётся напрямую в shell без проверки
@@ -343,7 +365,7 @@ fstec_lint/
 ├── parsers/        # compose/dockerfile/postgres/sshd/systemd файлы → dict
 ├── checks/         # логика проверок: parsed dict → список находок
 ├── rules/*.yaml     # метаданные правил: severity, мера ФСТЭК, remediation
-├── engine.py       # находит файлы, связывает checks + rules, отдаёт Finding[]
+├── engine.py       # находит файлы, связывает checks + rules, отдаёт ScanResult
 ├── reporters/      # text / json / html / sarif
 └── cli.py          # argparse-обвязка + exit code для CI
 ```
@@ -358,8 +380,21 @@ fstec_lint/
 — это ловит mypy на этапе CI, если проверку случайно зарегистрируют не
 там. Добавление нового типа файла (как sshd_config, systemd-юниты или
 Dockerfile) сводится к: парсер в `parsers/`, реестр проверок в
-`checks/`, YAML с правилами в `rules/` и один вызов `_run_registry(...)`
-в `engine.scan`.
+`checks/`, YAML с правилами в `rules/` и одна строка в списке реестров
+`engine.scan`.
+
+Проверка возвращает тройку `(location, detail, line)`: `location` —
+стабильный адрес находки внутри файла (`service:db`, `stage 2: FROM
+ubuntu`, `sshd_config: PermitRootLogin`), по нему считается отпечаток для
+baseline; `line` — номер строки для отчётов и SARIF. Разделение
+намеренное: номер строки меняется при любой правке выше по файлу, адрес
+находки — нет. Номера строк дают сами парсеры (`ConfigMap` для
+конфигов в формате «ключ = значение», узлы YAML для compose, позиция
+инструкции для Dockerfile).
+
+`engine.scan` возвращает `ScanResult` с находками **и** списком файлов,
+которые не удалось разобрать: каждый файл парсится в своём try/except,
+поэтому битый или бинарный файл виден в отчёте, но не прекращает скан.
 
 ## Проверка качества кода
 
@@ -368,7 +403,7 @@ Dockerfile) сводится к: парсер в `parsers/`, реестр про
 - `ruff check` — линт (импорты, неиспользуемый код, современный синтаксис);
 - `ruff format --check` — единый стиль форматирования;
 - `mypy --ignore-missing-imports` — статическая проверка типов;
-- `pytest` на Python 3.10/3.11/3.12 — 127 тестов, включая юнит-тесты на
+- `pytest` на Python 3.10/3.11/3.12 — 157 тестов, включая юнит-тесты на
   каждое правило, end-to-end проверку обоих примеров-стендов и проверку
   целостности каталога правил (у каждого правила из YAML есть
   функция-проверка с тем же `id`, и наоборот — иначе правило молча
@@ -398,14 +433,19 @@ pytest -v
 - [x] Привязка каждого правила к мере ФСТЭК и к конкретному действующему
       приказу (поле `orders`)
 - [x] Четыре формата вывода: `text`, `json`, `html`, `sarif` — последний
-      для загрузки в GitHub Code Scanning
+      для загрузки в GitHub Code Scanning, с реальными номерами строк и
+      отпечатками находок (`partialFingerprints`), не зависящими от сдвига
+      файла
 - [x] Каталог правил `--list-rules` со сводкой покрытия групп мер ФСТЭК
 - [x] Baseline (`--write-baseline` / `--baseline`) — внедрение в проект с
       существующим долгом без «красного CI с первого дня»
 - [x] Порог провала сборки `--fail-on`, готовый GitHub Action
 - [x] Два стенда для проверки инструмента: уязвимый и защищённый
+- [x] Устойчивость к «грязному» дереву: битый или бинарный файл не роняет
+      прогон (отдельный код выхода `3`), служебные каталоги вроде
+      `node_modules` и `.git` пропускаются, остальное — через `--exclude`
 - [x] CI: `ruff`, `ruff format`, `mypy`, `pytest` на Python 3.10–3.12
-      и самосканирование обоих стендов; 127 тестов
+      и самосканирование обоих стендов; 157 тестов
 
 ### Дальше
 
@@ -413,6 +453,10 @@ pytest -v
       взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
       перепроверяется периодически, на 01.09.2026 приказ всё ещё не
       зарегистрирован в Минюсте)
+- [ ] Отключение отдельных правил без baseline: `--select` / `--ignore`
+      и подавление комментарием в конфиге
+- [ ] Класс ГИС / уровень защищённости ПДн как входной параметр и отчёт
+      «требуемая мера → покрыта / нарушена / статикой не проверяется»
 - [ ] Разбор `Match`-блоков в `sshd_config`: сейчас директивы читаются
       только до первого `Match`, поэтому per-host и per-user
       переопределения остаются непроверенными
@@ -464,9 +508,15 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy --ignore-missing-imports` and `pytest` (127 tests) across Python
+`mypy --ignore-missing-imports` and `pytest` (157 tests) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
+
+**Exit codes:** `0` — clean, `1` — findings at or above `--fail-on`
+(default `high`), `2` — usage error, `3` — some files could not be parsed
+(a broken or binary file is reported and skipped, it never aborts the
+scan). Vendor directories (`.git`, `node_modules`, `vendor`, `.venv`, …)
+are always skipped; anything else via `--exclude GLOB`.
 
 Quick start:
 
@@ -478,6 +528,7 @@ fstec-lint --list-rules   # rule catalogue + which FSTEC measure groups it cover
 # adopting it in an existing project without a red CI on day one:
 fstec-lint . --write-baseline .fstec-lint-baseline.json   # accept current debt
 fstec-lint . --baseline .fstec-lint-baseline.json         # fail only on new findings
+fstec-lint . --exclude "tests/fixtures/*"                 # skip your own noise
 ```
 
 See the table above (`Что проверяется`) for the full rule list, and

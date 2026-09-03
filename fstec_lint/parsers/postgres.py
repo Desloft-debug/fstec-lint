@@ -3,15 +3,35 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .base import ConfigMap
+
 _SETTING_RE = re.compile(r"^([A-Za-z0-9_.]+)\s*=?\s*(.+)$")
 
 
-def parse_postgresql_conf(path: Path) -> dict:
-    """Разбирает postgresql.conf в dict {параметр: значение}, ключи в нижнем регистре."""
-    settings: dict[str, str] = {}
+def _strip_comment(line: str) -> str:
+    """Отрезает комментарий, не трогая '#' внутри кавычек.
+
+    log_line_prefix = '%m [%p] # ' — валидное значение, наивный split('#')
+    порезал бы его посередине.
+    """
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#":
+            return line[:index]
+    return line
+
+
+def parse_postgresql_conf(path: Path) -> ConfigMap:
+    """Разбирает postgresql.conf в ConfigMap {параметр: значение}, ключи в нижнем регистре."""
+    settings = ConfigMap()
     with open(path, encoding="utf-8") as f:
-        for raw_line in f:
-            line = raw_line.split("#", 1)[0].strip()
+        for lineno, raw_line in enumerate(f, start=1):
+            line = _strip_comment(raw_line).strip()
             if not line:
                 continue
             match = _SETTING_RE.match(line)
@@ -19,7 +39,7 @@ def parse_postgresql_conf(path: Path) -> dict:
                 continue
             key, value = match.group(1).lower(), match.group(2).strip()
             value = value.strip().strip("'\"")
-            settings[key] = value
+            settings.set(key, value, lineno)
     return settings
 
 
@@ -27,7 +47,7 @@ def parse_pg_hba(path: Path) -> list[dict]:
     """Разбирает pg_hba.conf в список записей {type, database, user, address, method, options}."""
     records: list[dict] = []
     with open(path, encoding="utf-8") as f:
-        for raw_line in f:
+        for lineno, raw_line in enumerate(f, start=1):
             line = raw_line.split("#", 1)[0].strip()
             if not line:
                 continue
@@ -59,6 +79,7 @@ def parse_pg_hba(path: Path) -> list[dict]:
                     "method": method,
                     "options": options,
                     "raw": line,
+                    "line": lineno,
                 }
             )
     return records

@@ -20,7 +20,8 @@ def render(findings: list[Finding]) -> str:
         counts[finding.rule.severity] += 1
         icon = SEVERITY_ICON[finding.rule.severity]
         lines.append(f"{icon} {finding.rule.id} {finding.rule.title}")
-        lines.append(f"       файл: {finding.file}")
+        location = finding.file if finding.line is None else f"{finding.file}:{finding.line}"
+        lines.append(f"       файл: {location}")
         lines.append(f"       где:  {finding.location}")
         lines.append(f"       мера: {finding.rule.measure} — {finding.rule.measure_title}")
         if finding.rule.orders:

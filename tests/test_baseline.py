@@ -121,7 +121,7 @@ def test_cli_baseline_still_reports_new_findings(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(EXAMPLES.parent)
     target = EXAMPLES / "vulnerable-stack"
 
-    findings = scan(target)
+    findings = scan(target).findings
     partial = [f for f in findings if f.rule.id != "C002"]
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(baseline.render(partial), encoding="utf-8")
