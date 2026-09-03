@@ -7,7 +7,7 @@ EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
 def test_vulnerable_stack_triggers_expected_rules():
-    findings = scan(EXAMPLES / "vulnerable-stack")
+    findings = scan(EXAMPLES / "vulnerable-stack").findings
     ids = {f.rule.id for f in findings}
 
     for expected in (
@@ -50,7 +50,7 @@ def test_vulnerable_stack_triggers_expected_rules():
 
 
 def test_hardened_stack_has_no_high_or_critical_findings():
-    findings = scan(EXAMPLES / "hardened-stack")
+    findings = scan(EXAMPLES / "hardened-stack").findings
     blocking = [f for f in findings if f.rule.severity >= Severity.HIGH]
     assert blocking == [], (
         f"неожиданные high/critical находки: {[(f.rule.id, f.location) for f in blocking]}"
@@ -58,4 +58,4 @@ def test_hardened_stack_has_no_high_or_critical_findings():
 
 
 def test_scan_empty_dir_returns_no_findings(tmp_path):
-    assert scan(tmp_path) == []
+    assert scan(tmp_path).findings == []

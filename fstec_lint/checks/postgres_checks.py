@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+from .base import CheckResult, config_line
+
 OPEN_ADDRESSES = {"0.0.0.0/0", "::/0", "all", "samehost", "samenet"}
 
 
-def check_trust_or_md5_auth(records: list[dict]) -> list[tuple[str, str]]:
+def check_trust_or_md5_auth(records: list[dict]) -> list[CheckResult]:
     findings = []
     for rec in records:
         method = (rec.get("method") or "").lower()
@@ -18,6 +20,7 @@ def check_trust_or_md5_auth(records: list[dict]) -> list[tuple[str, str]]:
                 (
                     f"pg_hba: {rec['raw']}",
                     "метод аутентификации 'trust' разрешает подключение без пароля",
+                    rec.get("line"),
                 )
             )
         elif method == "md5":
@@ -25,12 +28,13 @@ def check_trust_or_md5_auth(records: list[dict]) -> list[tuple[str, str]]:
                 (
                     f"pg_hba: {rec['raw']}",
                     "метод аутентификации 'md5' устарел, рекомендуется scram-sha-256",
+                    rec.get("line"),
                 )
             )
     return findings
 
 
-def check_open_hba_address(records: list[dict]) -> list[tuple[str, str]]:
+def check_open_hba_address(records: list[dict]) -> list[CheckResult]:
     findings = []
     for rec in records:
         addr = rec.get("address")
@@ -39,24 +43,26 @@ def check_open_hba_address(records: list[dict]) -> list[tuple[str, str]]:
                 (
                     f"pg_hba: {rec['raw']}",
                     f"подключение разрешено с адреса '{addr}' без ограничения по сети",
+                    rec.get("line"),
                 )
             )
     return findings
 
 
-def check_listen_addresses(settings: dict) -> list[tuple[str, str]]:
+def check_listen_addresses(settings: dict) -> list[CheckResult]:
     value = settings.get("listen_addresses", "")
     if value == "*":
         return [
             (
                 "postgresql.conf: listen_addresses",
                 "listen_addresses = '*' — сервер слушает все сетевые интерфейсы",
+                config_line(settings, "listen_addresses"),
             )
         ]
     return []
 
 
-def check_logging_disabled(settings: dict) -> list[tuple[str, str]]:
+def check_logging_disabled(settings: dict) -> list[CheckResult]:
     findings = []
     for key in ("log_connections", "log_disconnections"):
         value = settings.get(key, "off").lower()
@@ -65,31 +71,39 @@ def check_logging_disabled(settings: dict) -> list[tuple[str, str]]:
                 (
                     f"postgresql.conf: {key}",
                     f"{key} = {value} — события подключения/отключения не регистрируются",
+                    config_line(settings, key),
                 )
             )
     return findings
 
 
-def check_ssl_disabled(settings: dict) -> list[tuple[str, str]]:
+def check_ssl_disabled(settings: dict) -> list[CheckResult]:
     value = settings.get("ssl", "off").lower()
     if value != "on":
-        return [("postgresql.conf: ssl", f"ssl = {value} — соединения с СУБД не шифруются")]
+        return [
+            (
+                "postgresql.conf: ssl",
+                f"ssl = {value} — соединения с СУБД не шифруются",
+                config_line(settings, "ssl"),
+            )
+        ]
     return []
 
 
-def check_password_encryption(settings: dict) -> list[tuple[str, str]]:
+def check_password_encryption(settings: dict) -> list[CheckResult]:
     value = settings.get("password_encryption", "md5").lower()
     if value != "scram-sha-256":
         return [
             (
                 "postgresql.conf: password_encryption",
                 f"password_encryption = {value}, рекомендуется scram-sha-256",
+                config_line(settings, "password_encryption"),
             )
         ]
     return []
 
 
-def check_statement_logging_disabled(settings: dict) -> list[tuple[str, str]]:
+def check_statement_logging_disabled(settings: dict) -> list[CheckResult]:
     value = settings.get("log_statement", "none").lower()
     if value not in ("ddl", "mod", "all"):
         return [
@@ -97,12 +111,13 @@ def check_statement_logging_disabled(settings: dict) -> list[tuple[str, str]]:
                 "postgresql.conf: log_statement",
                 f"log_statement = {value} — изменения схемы и данных "
                 "не фиксируются в журнале аудита",
+                config_line(settings, "log_statement"),
             )
         ]
     return []
 
 
-def check_missing_statement_timeout(settings: dict) -> list[tuple[str, str]]:
+def check_missing_statement_timeout(settings: dict) -> list[CheckResult]:
     value = settings.get("statement_timeout", "0").strip()
     if value in ("0", "0ms", "0s", "0min", "0h", "0d", ""):
         return [
@@ -110,6 +125,7 @@ def check_missing_statement_timeout(settings: dict) -> list[tuple[str, str]]:
                 "postgresql.conf: statement_timeout",
                 "statement_timeout не задан (0) — зависшие или намеренно долгие "
                 "запросы не будут принудительно прерваны",
+                config_line(settings, "statement_timeout"),
             )
         ]
     return []

@@ -64,3 +64,38 @@ def test_parse_dockerfile_handles_line_continuation():
     instructions = parse_dockerfile(EXAMPLES / "hardened-stack" / "Dockerfile")
     run_instructions = [i for i in instructions if i["instruction"] == "RUN"]
     assert any("apt-get update" in i["args"] and "rm -rf" in i["args"] for i in run_instructions)
+
+
+def test_parsers_record_line_numbers():
+    vulnerable = EXAMPLES / "vulnerable-stack"
+
+    compose = parse_compose(vulnerable / "docker-compose.yml")
+    assert compose.service_line("db") == 4
+    assert compose.service_line("web") == 16
+    assert compose.service_line("нет-такого") is None
+
+    sshd = parse_sshd_config(vulnerable / "sshd_config")
+    assert sshd.line("permitrootlogin") == 2
+
+    settings = parse_postgresql_conf(vulnerable / "postgresql.conf")
+    assert settings.line("listen_addresses") == 1
+
+    hba = parse_pg_hba(vulnerable / "pg_hba.conf")
+    assert [record["line"] for record in hba] == [2, 3]
+
+    unit = parse_systemd_unit(vulnerable / "app.service")
+    assert unit["Service"].line("ExecStart") == 6
+
+
+def test_postgresql_conf_keeps_hash_inside_quotes(tmp_path):
+    conf = tmp_path / "postgresql.conf"
+    conf.write_text("log_line_prefix = '%m [%p] # '  # комментарий\n", encoding="utf-8")
+
+    assert parse_postgresql_conf(conf)["log_line_prefix"] == "%m [%p] # "
+
+
+def test_parse_compose_of_empty_file_is_empty(tmp_path):
+    empty = tmp_path / "docker-compose.yml"
+    empty.write_text("", encoding="utf-8")
+
+    assert parse_compose(empty) == {}

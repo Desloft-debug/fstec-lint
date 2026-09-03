@@ -35,6 +35,7 @@ class Finding:
     file: str
     location: str
     detail: str
+    line: int | None = None
 
     def relative_file(self) -> str:
         """Путь относительно текущего каталога.
@@ -50,7 +51,8 @@ class Finding:
     def fingerprint(self) -> str:
         """Идентификатор находки для baseline.
 
-        Намеренно не включает detail: текст может меняться при правках
-        формулировок, а находка при этом остаётся той же самой.
+        Намеренно не включает ни detail, ни line: текст может меняться при
+        правках формулировок, а номер строки — при любой вставке выше по
+        файлу; находка при этом остаётся той же самой.
         """
         return f"{self.rule.id}|{self.relative_file()}|{self.location}"

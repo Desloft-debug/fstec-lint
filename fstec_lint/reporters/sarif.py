@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from .. import __version__
@@ -11,6 +12,10 @@ LEVEL = {
     Severity.MEDIUM: "warning",
     Severity.LOW: "note",
 }
+
+
+def _fingerprint(finding: Finding) -> str:
+    return hashlib.sha256(finding.fingerprint().encode("utf-8")).hexdigest()[:16]
 
 
 def render(findings: list[Finding]) -> str:
@@ -40,10 +45,16 @@ def render(findings: list[Finding]) -> str:
                     {
                         "physicalLocation": {
                             "artifactLocation": {"uri": finding.relative_file()},
-                            "region": {"startLine": 1},
+                            # Строка известна не для всех форматов: у сервиса в
+                            # compose она есть, у «во всём файле нет HEALTHCHECK» —
+                            # условная. SARIF требует положительный номер строки.
+                            "region": {"startLine": finding.line or 1},
                         }
                     }
                 ],
+                # Отпечаток не зависит от номера строки, поэтому GitHub Code
+                # Scanning не заводит новый алерт после сдвига файла.
+                "partialFingerprints": {"fstecLintFingerprint/v1": _fingerprint(finding)},
             }
         )
 
