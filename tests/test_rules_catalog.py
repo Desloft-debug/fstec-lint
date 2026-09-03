@@ -6,26 +6,28 @@ from fstec_lint.models import Rule, Severity
 from fstec_lint.reporters import rules_catalog
 
 
-def _rule(rule_id="X001", measure="ЗСВ.2 / УПД.4", target="compose"):
+def _rule(rule_id="X001", measure="п. 63 д)", target="compose"):
     return Rule(
         id=rule_id,
         title="Тестовое правило",
         severity=Severity.HIGH,
         measure=measure,
-        measure_title="Защита среды виртуализации",
+        measure_title="Защита технологий контейнерных сред и их оркестрации",
         description="описание",
         remediation="исправление",
         target=target,
-        orders="№21 (ПДн)",
+        orders="Приказ ФСТЭК №117",
     )
 
 
-def test_measure_groups_strips_numbers():
-    assert rules_catalog.measure_groups(_rule(measure="ЗСВ.2 / УПД.4")) == ["ЗСВ", "УПД"]
+def test_measure_groups_reads_clauses_of_order_117():
+    """Покрытие считается по пунктам приказа N 117, а не по кодам N 17.
 
-
-def test_measure_groups_deduplicates():
-    assert rules_catalog.measure_groups(_rule(measure="ИАФ.1 / ИАФ.4")) == ["ИАФ"]
+    Кодов вида ЗСВ.2 в действующем приказе нет — они остались в
+    приложении к утратившему силу N 17.
+    """
+    assert rules_catalog.measure_groups(_rule(measure="п. 63 д)")) == ["п. 63 д)"]
+    assert rules_catalog.measure_groups(_rule(measure="п. 34 б)")) == ["п. 34 б)"]
 
 
 def test_render_text_lists_every_rule():
@@ -34,7 +36,7 @@ def test_render_text_lists_every_rule():
     assert f"Правил всего: {len(rules)}" in output
     for rule in rules:
         assert rule.id in output
-    assert "Затронутые группы мер ФСТЭК:" in output
+    assert "Затронутые пункты приказа ФСТЭК N 117:" in output
 
 
 def test_render_json_shape():
