@@ -99,3 +99,62 @@ def test_parse_compose_of_empty_file_is_empty(tmp_path):
     empty.write_text("", encoding="utf-8")
 
     assert parse_compose(empty) == {}
+
+
+def _dockerfile(tmp_path, lines):
+    path = tmp_path / "Dockerfile"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return parse_dockerfile(path)
+
+
+def test_heredoc_body_is_not_parsed_as_instructions(tmp_path):
+    instructions = _dockerfile(
+        tmp_path,
+        [
+            "FROM alpine:3.20",
+            "RUN <<EOF",
+            "apt-get update",
+            "USER root",
+            "EOF",
+            "USER app",
+        ],
+    )
+
+    assert [i["instruction"] for i in instructions] == ["FROM", "RUN", "USER"]
+    assert [i["line"] for i in instructions] == [1, 2, 6]
+    # тело heredoc осталось при инструкции, а не потерялось
+    assert "apt-get update" in instructions[1]["args"]
+
+
+def test_quoted_and_dash_heredoc_tags_are_understood(tmp_path):
+    instructions = _dockerfile(
+        tmp_path,
+        ["FROM alpine:3.20", "RUN <<-'SH'", "echo hi", "SH", 'CMD ["/bin/sh"]'],
+    )
+
+    assert [i["instruction"] for i in instructions] == ["FROM", "RUN", "CMD"]
+
+
+def test_line_continuation_still_joins_instructions(tmp_path):
+    instructions = _dockerfile(
+        tmp_path,
+        ["FROM alpine:3.20", "RUN apk add --no-cache \\", "    curl \\", "    git"],
+    )
+
+    assert len(instructions) == 2
+    assert instructions[1]["args"] == "apk add --no-cache curl git"
+    assert instructions[1]["line"] == 2
+
+
+def test_sshd_match_blocks_are_parsed(tmp_path):
+    path = tmp_path / "sshd_config"
+    path.write_text(
+        "PermitRootLogin no\nMatch Address 10.0.0.0/8\n    PermitRootLogin yes\n",
+        encoding="utf-8",
+    )
+
+    config = parse_sshd_config(path)
+
+    assert config["permitrootlogin"] == "no"
+    assert [b.criteria for b in config.matches] == ["Address 10.0.0.0/8"]
+    assert config.matches[0].settings["permitrootlogin"] == "yes"

@@ -2,90 +2,118 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from .base import CheckResult, config_line
 
 
-def check_permit_root_login(settings: dict) -> list[CheckResult]:
-    value = settings.get("permitrootlogin", "prohibit-password").lower()
-    if value in ("yes", "without-password"):
-        return [
-            (
-                "sshd_config: PermitRootLogin",
-                f"PermitRootLogin {value} — вход root по SSH разрешён",
-                config_line(settings, "permitrootlogin"),
+def _values(settings: dict, key: str, default: str) -> Iterator[tuple[str, str, int | None]]:
+    """Значение директивы в глобальной секции и в каждом Match-блоке.
+
+    В глобальной секции подставляется умолчание самого sshd: отсутствие
+    директивы — не то же самое, что безопасное значение. В Match-блоке
+    проверяется только явно заданное: неуказанная директива там
+    унаследована сверху и уже учтена глобальной проверкой, иначе одна и
+    та же находка размножилась бы по числу блоков.
+    """
+    yield "", str(settings.get(key, default)), config_line(settings, key)
+    for block in getattr(settings, "matches", []):
+        if key in block.settings:
+            yield (
+                f" (Match {block.criteria})",
+                str(block.settings[key]),
+                block.settings.line(key),
             )
-        ]
-    return []
+
+
+def check_permit_root_login(settings: dict) -> list[CheckResult]:
+    findings = []
+    for scope, raw, line in _values(settings, "permitrootlogin", "prohibit-password"):
+        value = raw.lower()
+        if value in ("yes", "without-password"):
+            findings.append(
+                (
+                    f"sshd_config: PermitRootLogin{scope}",
+                    f"PermitRootLogin {value} — вход root по SSH разрешён",
+                    line,
+                )
+            )
+    return findings
 
 
 def check_password_authentication(settings: dict) -> list[CheckResult]:
-    value = settings.get("passwordauthentication", "yes").lower()
-    if value == "yes":
-        return [
-            (
-                "sshd_config: PasswordAuthentication",
-                "PasswordAuthentication yes — доступ по паролю разрешён "
-                "вместо аутентификации по ключу",
-                config_line(settings, "passwordauthentication"),
+    findings = []
+    for scope, raw, line in _values(settings, "passwordauthentication", "yes"):
+        if raw.lower() == "yes":
+            findings.append(
+                (
+                    f"sshd_config: PasswordAuthentication{scope}",
+                    "PasswordAuthentication yes — доступ по паролю разрешён "
+                    "вместо аутентификации по ключу",
+                    line,
+                )
             )
-        ]
-    return []
+    return findings
 
 
 def check_permit_empty_passwords(settings: dict) -> list[CheckResult]:
-    value = settings.get("permitemptypasswords", "no").lower()
-    if value == "yes":
-        return [
-            (
-                "sshd_config: PermitEmptyPasswords",
-                "PermitEmptyPasswords yes — вход с пустым паролем разрешён",
-                config_line(settings, "permitemptypasswords"),
+    findings = []
+    for scope, raw, line in _values(settings, "permitemptypasswords", "no"):
+        if raw.lower() == "yes":
+            findings.append(
+                (
+                    f"sshd_config: PermitEmptyPasswords{scope}",
+                    "PermitEmptyPasswords yes — вход с пустым паролем разрешён",
+                    line,
+                )
             )
-        ]
-    return []
+    return findings
 
 
 def check_weak_protocol(settings: dict) -> list[CheckResult]:
-    value = settings.get("protocol", "2")
-    if "1" in value.split(","):
-        return [
-            (
-                "sshd_config: Protocol",
-                f"Protocol {value} — включён устаревший небезопасный SSH-1",
-                config_line(settings, "protocol"),
+    findings = []
+    for scope, raw, line in _values(settings, "protocol", "2"):
+        if "1" in raw.split(","):
+            findings.append(
+                (
+                    f"sshd_config: Protocol{scope}",
+                    f"Protocol {raw} — включён устаревший небезопасный SSH-1",
+                    line,
+                )
             )
-        ]
-    return []
+    return findings
 
 
 def check_x11_forwarding(settings: dict) -> list[CheckResult]:
-    value = settings.get("x11forwarding", "no").lower()
-    if value == "yes":
-        return [
-            (
-                "sshd_config: X11Forwarding",
-                "X11Forwarding yes — расширяет поверхность атаки без явной необходимости",
-                config_line(settings, "x11forwarding"),
+    findings = []
+    for scope, raw, line in _values(settings, "x11forwarding", "no"):
+        if raw.lower() == "yes":
+            findings.append(
+                (
+                    f"sshd_config: X11Forwarding{scope}",
+                    "X11Forwarding yes — расширяет поверхность атаки без явной необходимости",
+                    line,
+                )
             )
-        ]
-    return []
+    return findings
 
 
 def check_max_auth_tries(settings: dict) -> list[CheckResult]:
-    value = settings.get("maxauthtries", "6")
-    try:
-        tries = int(value)
-    except ValueError:
-        return []
-    if tries > 4:
-        return [
-            (
-                "sshd_config: MaxAuthTries",
-                f"MaxAuthTries {tries} — подбор пароля не ограничен разумным числом попыток",
-                config_line(settings, "maxauthtries"),
+    findings = []
+    for scope, raw, line in _values(settings, "maxauthtries", "6"):
+        try:
+            tries = int(raw)
+        except ValueError:
+            continue
+        if tries > 4:
+            findings.append(
+                (
+                    f"sshd_config: MaxAuthTries{scope}",
+                    f"MaxAuthTries {tries} — подбор пароля не ограничен разумным числом попыток",
+                    line,
+                )
             )
-        ]
-    return []
+    return findings
 
 
 REGISTRY = {

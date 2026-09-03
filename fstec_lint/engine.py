@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,13 @@ DEFAULT_EXCLUDED_DIRS = frozenset(
 
 CheckFn = Callable[[Any], list[CheckResult]]
 
+# Подавление находки прямо в проверяемом файле: комментарий действует на
+# свою строку и на следующую, чтобы его можно было писать и в хвосте
+# строки, и над ней (в YAML хвост не всегда читаем).
+#   ports: ["5432:5432"]  # fstec-lint: ignore C005
+#   # fstec-lint: ignore
+SUPPRESSION_RE = re.compile(r"fstec-lint:\s*ignore(?P<rules>[A-Za-z0-9,*\s]*)", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class ScanError:
@@ -69,6 +77,7 @@ class ScanError:
 class ScanResult:
     findings: list[Finding] = field(default_factory=list)
     errors: list[ScanError] = field(default_factory=list)
+    suppressed: int = 0
 
 
 def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
@@ -94,6 +103,59 @@ def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
 
 def _matches_any(name: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
+def _matches_rule(rule_id: str, patterns: Iterable[str]) -> bool:
+    """Правило задаётся id или glob-ом: C001, C*, ?00*. Регистр не важен."""
+    return any(fnmatch.fnmatch(rule_id.upper(), pattern.upper()) for pattern in patterns)
+
+
+def filter_rules(
+    rules: list[Rule], select: Sequence[str] = (), ignore: Sequence[str] = ()
+) -> list[Rule]:
+    """Оставляет правила из --select (если он задан) минус правила из --ignore."""
+    if select:
+        rules = [rule for rule in rules if _matches_rule(rule.id, select)]
+    if ignore:
+        rules = [rule for rule in rules if not _matches_rule(rule.id, ignore)]
+    return rules
+
+
+def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
+    """Шаблоны, не подошедшие ни к одному правилу, — обычно это опечатка."""
+    return [p for p in patterns if not any(_matches_rule(rule.id, [p]) for rule in rules)]
+
+
+def inline_suppressions(path: Path) -> dict[int, set[str]]:
+    """{строка: набор правил} из комментариев в самом файле.
+
+    Пустой набор означает «подавить любое правило на этой строке».
+    Комментарий действует на свою строку и на следующую.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    suppressions: dict[int, set[str]] = {}
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        match = SUPPRESSION_RE.search(line)
+        if match is None:
+            continue
+        raw = match.group("rules").replace(",", " ").split()
+        rules = {token.upper() for token in raw}
+        for target in (lineno, lineno + 1):
+            suppressions.setdefault(target, set()).update(rules)
+            if not rules:
+                suppressions[target] = set()
+    return suppressions
+
+
+def _is_suppressed(finding: Finding, suppressions: dict[int, set[str]]) -> bool:
+    if finding.line is None or finding.line not in suppressions:
+        return False
+    rules = suppressions[finding.line]
+    return not rules or _matches_rule(finding.rule.id, rules)
 
 
 def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
@@ -175,13 +237,23 @@ def _run_registry(
                 ScanError(file=str(path), message=" ".join(f"{type(exc).__name__}: {exc}".split()))
             )
             continue
-        result.findings.extend(file_findings)
+
+        suppressions = inline_suppressions(path)
+        kept = [f for f in file_findings if not _is_suppressed(f, suppressions)]
+        result.suppressed += len(file_findings) - len(kept)
+        result.findings.extend(kept)
 
 
-def scan(root: Path, rules_dir: Path = RULES_DIR, exclude: Sequence[str] = ()) -> ScanResult:
+def scan(
+    root: Path,
+    rules_dir: Path = RULES_DIR,
+    exclude: Sequence[str] = (),
+    select: Sequence[str] = (),
+    ignore: Sequence[str] = (),
+) -> ScanResult:
     """Сканирует root и возвращает находки (по убыванию severity) и ошибки разбора."""
     rules_by_target: dict[str, list[Rule]] = {}
-    for rule in load_rules(rules_dir):
+    for rule in filter_rules(load_rules(rules_dir), select, ignore):
         rules_by_target.setdefault(rule.target, []).append(rule)
 
     files = discover_files(root, exclude)

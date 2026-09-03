@@ -4,8 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import __version__
 from . import baseline as baseline_module
-from .engine import load_rules, scan
+from .engine import filter_rules, load_rules, scan, unknown_patterns
 from .models import Severity
 from .reporters import html, json_reporter, rules_catalog, sarif, text
 
@@ -44,6 +45,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="показать каталог правил и покрытие групп мер ФСТЭК, ничего не сканируя",
     )
+    parser.add_argument("--version", action="version", version=f"fstec-lint {__version__}")
+    parser.add_argument(
+        "--select",
+        action="append",
+        default=[],
+        metavar="RULES",
+        help=(
+            "проверять только эти правила: id или glob через запятую "
+            "(например C001,D0* ). Можно повторять"
+        ),
+    )
+    parser.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        metavar="RULES",
+        help=(
+            "не проверять эти правила: id или glob через запятую "
+            "(например C009,C013). Применяется после --select"
+        ),
+    )
     parser.add_argument(
         "--exclude",
         action="append",
@@ -68,6 +90,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _rule_patterns(values: list[str]) -> list[str]:
+    """--ignore C009,C013 --ignore D00* -> ['C009', 'C013', 'D00*']."""
+    return [token.strip() for value in values for token in value.split(",") if token.strip()]
+
+
+def _warn_unknown(rules, patterns: list[str], option: str) -> None:
+    for pattern in unknown_patterns(rules, patterns):
+        print(
+            f"fstec-lint: {option} {pattern} — нет правил с таким id",
+            file=sys.stderr,
+        )
+
+
 def _write(output: str, destination: str | None) -> None:
     if destination:
         Path(destination).write_text(output + "\n", encoding="utf-8")
@@ -78,8 +113,14 @@ def _write(output: str, destination: str | None) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    select = _rule_patterns(args.select)
+    ignore = _rule_patterns(args.ignore)
+    all_rules = load_rules()
+    _warn_unknown(all_rules, select, "--select")
+    _warn_unknown(all_rules, ignore, "--ignore")
+
     if args.list_rules:
-        rules = load_rules()
+        rules = filter_rules(all_rules, select, ignore)
         if args.format == "json":
             _write(rules_catalog.render_json(rules), args.output)
         else:
@@ -91,11 +132,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fstec-lint: путь не найден: {root}", file=sys.stderr)
         return 2
 
-    result = scan(root, exclude=args.exclude)
+    result = scan(root, exclude=args.exclude, select=select, ignore=ignore)
     findings = result.findings
 
     for error in result.errors:
         print(f"fstec-lint: не удалось разобрать {error.file}: {error.message}", file=sys.stderr)
+
+    if result.suppressed:
+        print(
+            f"fstec-lint: подавлено комментариями в файлах: {result.suppressed}",
+            file=sys.stderr,
+        )
 
     if args.write_baseline:
         Path(args.write_baseline).write_text(

@@ -14,7 +14,8 @@ SEVERITY_COLOR = {
 
 def _row(finding: Finding) -> str:
     color = SEVERITY_COLOR[finding.rule.severity]
-    where = finding.file if finding.line is None else f"{finding.file}:{finding.line}"
+    path = finding.relative_file()
+    where = path if finding.line is None else f"{path}:{finding.line}"
     return f"""
         <tr>
           <td><span class="badge" style="background:{color}">{finding.rule.severity.name}</span></td>
