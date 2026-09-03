@@ -24,6 +24,16 @@ jobs:
       - name: mypy
         run: mypy fstec_lint
 
+      # ГОСТ Р 56939-2024, п. 5.16.2.3: контролировать перечень
+      # зависимостей на предмет наличия известных уязвимостей.
+      # Аудит идёт по constraints.txt — это и есть перечень зависимостей
+      # с указанием версий по п. 5.16.3.2. Сам пакет пропущен: он
+      # ставится из исходников и на PyPI его нет.
+      - name: pip-audit (композиционный анализ зависимостей)
+        run: |
+          pip install pip-audit
+          pip-audit --strict -r constraints.txt
+
   test:
     runs-on: ubuntu-latest
     strategy:
