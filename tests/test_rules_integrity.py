@@ -131,36 +131,59 @@ def test_container_rules_are_anchored_to_the_container_measure():
     assert {"C002", "C003", "C008", "C009", "C015"} <= anchored
 
 
-def test_methodology_group_is_one_of_the_known_groups():
-    """Группа методического документа не выдумывается на месте."""
+def test_submeasure_exists_in_the_methodology_catalogue():
+    """Подмера обязана существовать в методическом документе.
+
+    Раньше привязка велась на уровне придуманной группы, потому что
+    каталога подмер на руках не было. Теперь есть, и ссылку можно
+    проверить машинно.
+    """
     for rule in load_rules():
-        if not rule.methodology:
-            continue
-        assert rule.methodology in measures.METHODOLOGY_GROUPS, (
-            f"{rule.id}: неизвестная группа мер '{rule.methodology}'"
+        assert rule.submeasure in measures.SUBMEASURES, (
+            f"{rule.id}: подмеры '{rule.submeasure}' нет в каталоге"
         )
-        assert rule.methodology_title == measures.METHODOLOGY_GROUPS[rule.methodology], (
-            f"{rule.id}: наименование группы разошлось с методическим документом"
+        assert rule.submeasure_title == measures.SUBMEASURES[rule.submeasure], (
+            f"{rule.id}: наименование подмеры разошлось с методическим документом"
         )
 
 
-def test_every_rule_has_a_methodology_group():
-    """Пустых групп не осталось: РСБ и ЗТС закрыли последние три правила."""
-    ungrouped = {rule.id for rule in load_rules() if not rule.methodology}
+def test_activity_exists_in_the_methodology_catalogue():
+    for rule in load_rules():
+        assert rule.activity in measures.ACTIVITIES, (
+            f"{rule.id}: мероприятия '{rule.activity}' нет в разделе III"
+        )
+        assert rule.activity_title == measures.ACTIVITIES[rule.activity], (
+            f"{rule.id}: наименование мероприятия разошлось с документом"
+        )
 
-    assert ungrouped == set()
+
+def test_submeasure_group_is_a_real_group():
+    for rule in load_rules():
+        group = measures.submeasure_group(rule.submeasure)
+        assert group in measures.MEASURE_GROUPS, f"{rule.id}: группы '{group}' нет в разделе IV"
+
+
+def test_container_rules_use_the_container_submeasures():
+    """Правила про сам контейнер стоят в группе ЗКО, а не в общей ЗСВ.
+
+    До методического документа 2026 года отдельной группы под контейнеры
+    не было, и такие находки привязывались к защите среды виртуализации.
+    """
+    zko = {rule.id for rule in load_rules() if measures.submeasure_group(rule.submeasure) == "ЗКО"}
+
+    assert {"C002", "C003", "C008", "C009", "C015", "D001", "D003"} <= zko
 
 
 def test_logging_and_channel_rules_are_not_swapped():
-    """P005 — шифрование канала, P007 — аудит операций, не наоборот.
+    """P005 — защита канала, P007 — регистрация событий, не наоборот.
 
-    Правила легко перепутать по названиям: у обоих в заголовке слово из
-    соседней области. Судить нужно по предмету проверки: P005 смотрит
-    'ssl', то есть защиту канала передачи данных, а P007 — 'log_statement',
-    то есть регистрацию событий.
+    Правила легко перепутать по заголовкам: у обоих в названии слово из
+    соседней области. Судить нужно по предмету: P005 смотрит 'ssl', то
+    есть передачу данных по каналу связи, а P007 — 'log_statement', то
+    есть регистрацию событий.
     """
-    groups = {rule.id: rule.methodology for rule in load_rules()}
+    subs = {rule.id: rule.submeasure for rule in load_rules()}
 
-    assert groups["P004"] == "РСБ"
-    assert groups["P007"] == "РСБ"
-    assert groups["P005"] == "ЗТС"
+    assert subs["P004"] == "РСБ.1"
+    assert subs["P007"] == "РСБ.1"
+    assert subs["P005"] == "ЗКС.1"

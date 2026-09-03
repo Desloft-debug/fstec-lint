@@ -25,10 +25,12 @@ def render(findings: list[Finding]) -> str:
         lines.append(f"       файл: {location}")
         lines.append(f"       где:  {finding.location}")
         lines.append(f"       мера: {finding.rule.measure} — {finding.rule.measure_title}")
-        if finding.rule.methodology:
+        if finding.rule.submeasure:
             lines.append(
-                f"       группа: {finding.rule.methodology} — {finding.rule.methodology_title}"
+                f"       подмера: {finding.rule.submeasure} — {finding.rule.submeasure_title}"
             )
+        if finding.rule.activity:
+            lines.append(f"       процесс: {finding.rule.activity} — {finding.rule.activity_title}")
         if finding.rule.orders:
             lines.append(f"       приказ: {finding.rule.orders}")
         lines.append(f"       факт: {finding.detail}")

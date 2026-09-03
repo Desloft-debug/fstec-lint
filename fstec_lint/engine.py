@@ -96,8 +96,10 @@ def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
                     remediation=" ".join(item["remediation"].split()),
                     target=item["target"],
                     orders=item.get("orders", ""),
-                    methodology=item.get("methodology", ""),
-                    methodology_title=item.get("methodology_title", ""),
+                    submeasure=item.get("submeasure", ""),
+                    submeasure_title=item.get("submeasure_title", ""),
+                    activity=item.get("activity", ""),
+                    activity_title=item.get("activity_title", ""),
                     legacy_measure=item.get("legacy_measure", ""),
                 )
             )
