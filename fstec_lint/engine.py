@@ -145,9 +145,17 @@ def inline_suppressions(path: Path) -> dict[int, set[str]]:
         raw = match.group("rules").replace(",", " ").split()
         rules = {token.upper() for token in raw}
         for target in (lineno, lineno + 1):
-            suppressions.setdefault(target, set()).update(rules)
             if not rules:
+                # Сплошное подавление поглощает любой перечень правил...
                 suppressions[target] = set()
+                continue
+            already = suppressions.get(target)
+            if already is not None and not already:
+                # ...и обратно им не сужается: комментарий '# fstec-lint:
+                # ignore' на строке выше глушит строку целиком, даже если
+                # на ней самой перечислены отдельные правила.
+                continue
+            suppressions.setdefault(target, set()).update(rules)
     return suppressions
 
 
@@ -268,7 +276,13 @@ def scan(
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
     ]
     for target, registry, parse in registries:
-        _run_registry(result, files[target], rules_by_target.get(target, []), registry, parse)
+        target_rules = rules_by_target.get(target, [])
+        # Ни одного активного правила для этого типа файлов — разбирать
+        # их незачем. Иначе --select/--ignore не спасали от битого файла
+        # отключённого типа: он всё равно давал ошибку разбора и код 3.
+        if not target_rules:
+            continue
+        _run_registry(result, files[target], target_rules, registry, parse)
 
     result.findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id, f.location))
     result.errors.sort(key=lambda e: e.file)

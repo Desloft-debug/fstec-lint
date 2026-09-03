@@ -23,6 +23,9 @@ SENSITIVE_HOST_MOUNTS = {"/", "/etc", "/proc", "/sys", "/var/run", "/boot", "/ro
 DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
 DEBUG_TRUTHY = {"1", "true", "yes", "on"}
 ROOT_UIDS = {"root", "0"}
+# ${DB_PASSWORD:-changeme} — подстановка со значением по умолчанию:
+# сама ссылка безопасна, а вот дефолт в ней лежит в репозитории.
+ENV_DEFAULT_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]([^}]*)\}$")
 
 
 def _services(compose: dict) -> dict:
@@ -119,14 +122,16 @@ def check_secrets_in_environment(compose: dict) -> list[CheckResult]:
             if key.upper().endswith(("_FILE", "_FILENAME")):
                 # docker secrets convention: значение — это путь, а не сам секрет
                 continue
-            if value and not value.startswith("$") and SECRET_KEY_RE.search(key):
-                findings.append(
-                    (
-                        f"service:{name}",
-                        f"переменная {key} содержит секрет в открытом виде",
-                        _line(compose, name),
-                    )
-                )
+            if not value or not SECRET_KEY_RE.search(key):
+                continue
+            if value.startswith("$"):
+                default = ENV_DEFAULT_RE.match(value)
+                if default is None or not default.group(1).strip():
+                    continue
+                detail = f"переменная {key} подставляет секрет по умолчанию: {value}"
+            else:
+                detail = f"переменная {key} содержит секрет в открытом виде"
+            findings.append((f"service:{name}", detail, _line(compose, name)))
     return findings
 
 
