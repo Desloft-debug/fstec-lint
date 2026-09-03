@@ -103,6 +103,13 @@ sshd_config, юниты systemd) с привязкой каждого из **40 
 | S005 | `X11Forwarding yes` | ЗИС.20 |
 | S006 | `MaxAuthTries` больше 4 | УПД.4 |
 
+Условные блоки `Match` разбираются наравне с глобальной секцией: если
+`PermitRootLogin no` стоит вверху файла, а внутри `Match Address
+10.0.0.0/8` он снова `yes` — это находка, и в отчёте видно, в каком
+именно блоке. Директива, не заданная внутри блока, наследуется сверху и
+повторно не считается, поэтому одна и та же проблема не размножается по
+числу блоков.
+
 **systemd** (`*.service`, секция `[Service]`):
 
 | Правило | Проблема | Мера ФСТЭК |
@@ -159,6 +166,9 @@ fstec-lint . --write-baseline .fstec-lint-baseline.json   # зафиксиров
 fstec-lint . --baseline .fstec-lint-baseline.json         # падать только на новых находках
 
 fstec-lint . --exclude "tests/fixtures/*" --exclude legacy  # не сканировать своё
+fstec-lint . --ignore C013,C009    # выключить правила (id или glob)
+fstec-lint . --select "S0*,P0*"    # проверять только SSH и PostgreSQL
+fstec-lint --version
 ```
 
 `fstec-lint` рекурсивно ищет `docker-compose*.yml`, `Dockerfile`,
@@ -169,6 +179,44 @@ fstec-lint . --exclude "tests/fixtures/*" --exclude legacy  # не сканир�
 только создают шум. Всё остальное исключается через `--exclude` (glob по
 имени или по пути относительно корня сканирования, флаг можно повторять).
 
+### Как выключить правило
+
+Три способа, от точечного к глобальному.
+
+**Комментарий в самом файле** — когда исключение относится к одному
+месту и его нужно объяснить рядом с кодом:
+
+```yaml
+services:
+  db:  # fstec-lint: ignore C001, C009
+    image: postgres:16.4
+```
+
+Комментарий действует на свою строку и на следующую (чтобы его можно
+было писать и в хвосте строки, и над ней), понимает список правил через
+запятую и glob (`C0*`), а без списка — `# fstec-lint: ignore` — глушит
+на этой строке всё. Работает в любом проверяемом формате: YAML,
+Dockerfile, `sshd_config`, `postgresql.conf`, юниты systemd. Число
+подавленных так находок печатается в stderr, чтобы «тихих» исключений не
+накапливалось незаметно.
+
+**`--ignore` / `--select`** — когда правило не подходит проекту целиком:
+
+```bash
+fstec-lint . --ignore C013          # healthcheck заводится не здесь
+fstec-lint . --ignore "C009,C012"
+fstec-lint . --select "S0*"         # только SSH
+```
+
+Оба принимают id и glob, через запятую или повторением флага;
+`--ignore` применяется после `--select`. Шаблон, не подошедший ни к
+одному правилу, — почти всегда опечатка, поэтому о нём предупреждают в
+stderr. Те же флаги работают с `--list-rules`, так что выгруженный
+каталог соответствует тому, что реально проверяется.
+
+**`--baseline`** — когда правило нужное, но долг разбирается постепенно
+(см. раздел ниже).
+
 ### Коды выхода
 
 | Код | Что означает                                                        |
@@ -177,6 +225,11 @@ fstec-lint . --exclude "tests/fixtures/*" --exclude legacy  # не сканир�
 | `1` | есть находки severity `--fail-on` или выше (по умолчанию `high`)    |
 | `2` | ошибка вызова: путь не найден, baseline отсутствует или повреждён   |
 | `3` | часть файлов не удалось разобрать — инструмент отработал не полностью |
+
+Пути в отчётах всегда относительные — от каталога, из которого запущена
+команда. Отчёт, снятый на ноутбуке, и отчёт из CI сравнимы построчно, а
+SARIF с абсолютными путями GitHub просто не сопоставил бы с файлами
+репозитория.
 
 Код `3` намеренно отделён от `1`: битый YAML, не-UTF-8 файл с расширением
 `.service` или отсутствие прав — это проблема прогона, а не проекта, и
@@ -403,7 +456,7 @@ baseline; `line` — номер строки для отчётов и SARIF. Р�
 - `ruff check` — линт (импорты, неиспользуемый код, современный синтаксис);
 - `ruff format --check` — единый стиль форматирования;
 - `mypy --ignore-missing-imports` — статическая проверка типов;
-- `pytest` на Python 3.10/3.11/3.12 — 157 тестов, включая юнит-тесты на
+- `pytest` на Python 3.10/3.11/3.12 — 182 теста, включая юнит-тесты на
   каждое правило, end-to-end проверку обоих примеров-стендов и проверку
   целостности каталога правил (у каждого правила из YAML есть
   функция-проверка с тем же `id`, и наоборот — иначе правило молча
@@ -441,11 +494,15 @@ pytest -v
       существующим долгом без «красного CI с первого дня»
 - [x] Порог провала сборки `--fail-on`, готовый GitHub Action
 - [x] Два стенда для проверки инструмента: уязвимый и защищённый
+- [x] Отключение правил тремя способами: комментарий `# fstec-lint: ignore`
+      в проверяемом файле, флаги `--select` / `--ignore`, baseline
+- [x] Разбор `Match`-блоков в `sshd_config` — директивы, переопределённые
+      для отдельных хостов и пользователей, больше не пропускаются
 - [x] Устойчивость к «грязному» дереву: битый или бинарный файл не роняет
       прогон (отдельный код выхода `3`), служебные каталоги вроде
       `node_modules` и `.git` пропускаются, остальное — через `--exclude`
 - [x] CI: `ruff`, `ruff format`, `mypy`, `pytest` на Python 3.10–3.12
-      и самосканирование обоих стендов; 157 тестов
+      и самосканирование обоих стендов; 182 теста
 
 ### Дальше
 
@@ -453,13 +510,15 @@ pytest -v
       взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
       перепроверяется периодически, на 01.09.2026 приказ всё ещё не
       зарегистрирован в Минюсте)
-- [ ] Отключение отдельных правил без baseline: `--select` / `--ignore`
-      и подавление комментарием в конфиге
 - [ ] Класс ГИС / уровень защищённости ПДн как входной параметр и отчёт
-      «требуемая мера → покрыта / нарушена / статикой не проверяется»
-- [ ] Разбор `Match`-блоков в `sshd_config`: сейчас директивы читаются
-      только до первого `Match`, поэтому per-host и per-user
-      переопределения остаются непроверенными
+      «требуемая мера → покрыта / нарушена / статикой не проверяется».
+      Механика тут простая, а вот содержимое — нет: нужен выверенный
+      базовый набор мер по классам К1–К3 (приказ №117) и по УЗ1–УЗ4
+      (приказ №21 либо то, что придёт ему на смену), перенесённый из
+      действующей редакции документа. Набор, набранный по памяти или
+      «примерно», давал бы ложное «мера покрыта» в инструменте, которым
+      готовятся к аттестации, — поэтому таблицы переносятся сверкой с
+      текстом приказа, а не дописываются заодно с кодом
 - [ ] Проверка `.env`-файлов на секреты в открытом виде — сейчас они
       ловятся только в секции `environment` внутри compose, сам `.env`
       не сканируется
@@ -508,9 +567,15 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy --ignore-missing-imports` and `pytest` (157 tests) across Python
+`mypy --ignore-missing-imports` and `pytest` (182 tests) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
+
+**Turning rules off:** `# fstec-lint: ignore C001, C009` as a comment in
+the scanned file itself (it covers its own line and the next one, accepts
+globs, and a bare `# fstec-lint: ignore` silences everything on that
+line), `--ignore` / `--select` with rule ids or globs for a whole run, or
+`--baseline` to accept existing debt and fail only on new findings.
 
 **Exit codes:** `0` — clean, `1` — findings at or above `--fail-on`
 (default `high`), `2` — usage error, `3` — some files could not be parsed
@@ -529,6 +594,7 @@ fstec-lint --list-rules   # rule catalogue + which FSTEC measure groups it cover
 fstec-lint . --write-baseline .fstec-lint-baseline.json   # accept current debt
 fstec-lint . --baseline .fstec-lint-baseline.json         # fail only on new findings
 fstec-lint . --exclude "tests/fixtures/*"                 # skip your own noise
+fstec-lint . --ignore C013 --select "C0*,D0*"             # narrow the rule set
 ```
 
 See the table above (`Что проверяется`) for the full rule list, and

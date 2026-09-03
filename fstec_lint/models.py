@@ -41,12 +41,19 @@ class Finding:
         """Путь относительно текущего каталога.
 
         Абсолютные пути непереносимы между машиной разработчика и CI, а
-        baseline и SARIF должны сравниваться и там, и там.
+        baseline, SARIF и обычные отчёты должны сравниваться и там, и там.
+        Если путь уходит выше текущего каталога (сканируют что-то в
+        стороне от проекта), относительная запись превращается в цепочку
+        '../../..' и не даёт ничего, кроме нечитаемости, — тогда честнее
+        абсолютный путь.
         """
         try:
-            return os.path.relpath(self.file, start=os.getcwd())
+            relative = os.path.relpath(self.file, start=os.getcwd())
         except ValueError:  # разные диски на Windows
             return self.file
+        if relative.split(os.sep, 1)[0] == os.pardir:
+            return self.file
+        return relative
 
     def fingerprint(self) -> str:
         """Идентификатор находки для baseline.

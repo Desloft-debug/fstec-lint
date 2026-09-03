@@ -4,3 +4,9 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 X11Forwarding no
 MaxAuthTries 4
+
+# Условные блоки тоже проверяются: директива, заданная внутри Match,
+# больше не остаётся невидимой для линтера.
+Match Address 10.0.0.0/8
+    PasswordAuthentication no
+    MaxAuthTries 3

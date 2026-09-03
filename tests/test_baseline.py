@@ -144,6 +144,7 @@ def test_cli_missing_baseline_file_exits_2(tmp_path, capsys):
 
 def test_relative_file_falls_back_to_absolute_outside_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    finding = _finding(file=os.path.join(os.sep, "somewhere", "else", "docker-compose.yml"))
-    # относительный путь может уйти вверх через .., но обязан остаться строкой
-    assert isinstance(finding.relative_file(), str)
+    outside = os.path.join(os.sep, "somewhere", "else", "docker-compose.yml")
+    finding = _finding(file=outside)
+    # цепочка '../../..' до чужого каталога нечитаема и ничего не даёт
+    assert finding.relative_file() == outside
