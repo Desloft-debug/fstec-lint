@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from fstec_lint import measures, terms
+from fstec_lint import auth, measures, terms
 from fstec_lint.checks import (
     compose_checks,
     dockerfile_checks,
@@ -202,3 +202,34 @@ def test_gost_terms_used_in_rules_are_defined():
 
     assert cited, "ни одно правило не ссылается на ГОСТ — проверка потеряла смысл"
     assert cited <= known, f"ссылки на неописанные пункты ГОСТа: {sorted(cited - known)}"
+
+
+def test_gost_58833_citations_point_at_known_clauses():
+    """Ссылка на ГОСТ Р 58833-2020 должна вести на описанный пункт.
+
+    Раздел 7.2 стандарта связывает вид аутентификации с уровнем доверия
+    к её результатам напрямую — это нормативное основание severity
+    правил об аутентификации, а не оценочное суждение, и ссылки на него
+    обязаны быть точными.
+    """
+    text = " ".join(rule.description for rule in load_rules())
+    cited = set(re.findall(r"ГОСТ Р 58833-2020,\s*п\.\s*(\d+\.\d+)", text))
+    known = {kind.clause for kind in auth.KINDS.values()} | {
+        auth.PASSWORD_AUTH_CLAUSE,
+        auth.AUTH_DEVICE_SEPARATION_CLAUSE,
+        "6.3",
+        "7.2",
+    }
+
+    assert cited, "ни одно правило не ссылается на ГОСТ Р 58833-2020"
+    assert cited <= known, f"ссылки на неописанные пункты: {sorted(cited - known)}"
+
+
+def test_password_authentication_rules_cite_the_trust_level():
+    """S002 и P001 обязаны объяснять, почему пароль — это низкий уровень."""
+    rules = {rule.id: rule for rule in load_rules()}
+
+    for rule_id in ("S002", "P001"):
+        assert "низкий уровень доверия" in rules[rule_id].description, (
+            f"{rule_id}: не назван уровень доверия по разделу 7.2"
+        )
