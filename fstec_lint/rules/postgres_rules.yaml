@@ -79,8 +79,8 @@
   severity: medium
   measure: "п. 63 в)"
   measure_title: "Регистрация событий безопасности"
-  methodology: ""
-  methodology_title: ""
+  methodology: "РСБ"
+  methodology_title: "Регистрация событий безопасности"
   legacy_measure: "РСБ.1 / РСБ.3"
   orders: "Приказ ФСТЭК №117 от 11.04.2025 (ГИС, действует с 01.03.2026, заменил №17). Для ИСПДн — приказ №21 до его замены"
   description: >
@@ -95,8 +95,8 @@
   severity: medium
   measure: "п. 63 с)"
   measure_title: "Защита каналов передачи данных и сетевого взаимодействия"
-  methodology: ""
-  methodology_title: ""
+  methodology: "ЗТС"
+  methodology_title: "Защита транспортной среды и каналов передачи данных"
   legacy_measure: "ЗИС.17 / ЗНИ.1"
   orders: "Приказ ФСТЭК №117 от 11.04.2025 (ГИС, действует с 01.03.2026, заменил №17). Для ИСПДн — приказ №21 до его замены"
   description: >
@@ -129,8 +129,8 @@
   severity: medium
   measure: "п. 63 в)"
   measure_title: "Регистрация событий безопасности"
-  methodology: ""
-  methodology_title: ""
+  methodology: "РСБ"
+  methodology_title: "Регистрация событий безопасности"
   legacy_measure: "РСБ.2"
   orders: "Приказ ФСТЭК №117 от 11.04.2025 (ГИС, действует с 01.03.2026, заменил №17). Для ИСПДн — приказ №21 до его замены"
   description: >
