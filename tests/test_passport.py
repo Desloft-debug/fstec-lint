@@ -8,6 +8,7 @@
 
 from datetime import date
 
+from fstec_lint import vulnclass
 from fstec_lint.engine import load_rules, scan
 from fstec_lint.reporters import passport
 
@@ -79,3 +80,30 @@ def test_undetermined_elements_are_marked_not_invented(tmp_path):
 
 def test_empty_result_does_not_produce_passports():
     assert "не составлялись" in passport.render([])
+
+
+def test_class_and_defect_type_come_from_gost_56546():
+    """Класс и тип недостатка — цитаты, а не формулировки по смыслу.
+
+    ГОСТ Р 56545-2015 в пунктах 5.2.6 и 5.2.10 требует определять их
+    «в соответствии с ГОСТ Р 56546». До появления его текста оба поля
+    стояли по смыслу, а наименования типов были переводом названий CWE.
+    """
+    assert passport.VULNERABILITY_CLASS in vulnclass.ORIGIN_CLASSES
+    assert passport.VULNERABILITY_LOCATION in vulnclass.LOCATIONS
+
+    known = set(vulnclass.DEFECT_TYPES.values())
+    for rule in load_rules():
+        assert rule.weakness_type in known, f"{rule.id}: тип недостатка не из перечня ГОСТ Р 56546"
+
+
+def test_cwe_is_kept_as_an_external_identifier():
+    """CWE остаётся: п. 5.2.11 разрешает брать идентификатор извне.
+
+    Тип недостатка теперь цитата из ГОСТ Р 56546, а CWE — уточняющий
+    идентификатор из общедоступного источника. Это разные элементы
+    паспорта (5.2.10 и 5.2.11), и подменять один другим нельзя.
+    """
+    for rule in load_rules():
+        assert rule.cwe.startswith("CWE-")
+        assert rule.cwe not in rule.weakness_type
