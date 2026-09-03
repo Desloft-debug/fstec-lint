@@ -11,11 +11,11 @@ inputs:
     required: false
     default: "."
   format:
-    description: "Формат отчёта: text | json | html"
+    description: "Формат отчёта: text | json | html | sarif"
     required: false
     default: "text"
   output:
-    description: "Путь для сохранения отчёта"
+    description: "Путь для сохранения отчёта (расширение задавайте под format)"
     required: false
     default: "fstec-lint-report.txt"
   fail-on:
@@ -33,7 +33,11 @@ runs:
 
     - name: Install fstec-lint
       shell: bash
-      run: pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
+      # Ставим ту же ревизию, с которой вызван сам Action: без этого
+      # 'uses: ...@v0.8.1' закрепляет обёртку, а инструмент всё равно
+      # приезжает с HEAD и прогон перестаёт быть воспроизводимым.
+      run: |
+        pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@${{ github.action_ref || 'main' }}"
 
     - name: Run fstec-lint
       shell: bash

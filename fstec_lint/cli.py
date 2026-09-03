@@ -124,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.format == "json":
             _write(rules_catalog.render_json(rules), args.output)
         else:
+            if args.format != "text":
+                print(
+                    f"fstec-lint: --list-rules не поддерживает формат {args.format}, "
+                    "каталог выведен как text",
+                    file=sys.stderr,
+                )
             _write(rules_catalog.render_text(rules), args.output)
         return 0
 

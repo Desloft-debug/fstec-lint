@@ -13,7 +13,11 @@ class Severity(IntEnum):
 
     @classmethod
     def from_str(cls, value: str) -> Severity:
-        return cls[value.upper()]
+        try:
+            return cls[value.upper()]
+        except KeyError:
+            allowed = ", ".join(level.name.lower() for level in cls)
+            raise ValueError(f"неизвестная severity: {value!r} (допустимы: {allowed})") from None
 
 
 @dataclass(frozen=True)

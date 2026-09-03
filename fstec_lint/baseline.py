@@ -14,6 +14,7 @@ from pathlib import Path
 from .models import Finding
 
 BASELINE_VERSION = 2
+REQUIRED_FIELDS = frozenset({"rule_id", "file", "location"})
 
 
 class BaselineError(Exception):
@@ -45,6 +46,15 @@ def load(path: Path) -> set[str]:
     except json.JSONDecodeError as exc:
         raise BaselineError(f"baseline-файл повреждён ({path}): {exc}") from exc
 
+    # Файл лежит в репозитории и правится руками, поэтому «синтаксически
+    # верный, но не той формы» — обычный случай, а не экзотика. Он должен
+    # приводить к понятной ошибке и коду 2, а не к трейсбеку.
+    if not isinstance(raw, dict):
+        raise BaselineError(
+            f"baseline-файл повреждён ({path}): ожидался объект JSON, "
+            f"получен {type(raw).__name__} — перегенерируйте файл через --write-baseline"
+        )
+
     version = raw.get("version")
     if version != BASELINE_VERSION:
         raise BaselineError(
@@ -52,8 +62,21 @@ def load(path: Path) -> set[str]:
             "перегенерируйте файл через --write-baseline"
         )
 
+    entries = raw.get("findings", [])
+    if not isinstance(entries, list):
+        raise BaselineError(
+            f"baseline-файл повреждён ({path}): поле 'findings' должно быть списком — "
+            "перегенерируйте файл через --write-baseline"
+        )
+
     fingerprints = set()
-    for entry in raw.get("findings", []):
+    for entry in entries:
+        if not isinstance(entry, dict) or not REQUIRED_FIELDS <= entry.keys():
+            raise BaselineError(
+                f"baseline-файл повреждён ({path}): запись без обязательных полей "
+                f"{', '.join(sorted(REQUIRED_FIELDS))}: {entry!r} — "
+                "перегенерируйте файл через --write-baseline"
+            )
         fingerprints.add(f"{entry['rule_id']}|{entry['file']}|{entry['location']}")
     return fingerprints
 
