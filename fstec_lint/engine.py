@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
-from .checks.base import CheckResult
+from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
 from .parsers.compose import parse_compose
 from .parsers.dockerfile import parse_dockerfile
@@ -55,7 +55,7 @@ DEFAULT_EXCLUDED_DIRS = frozenset(
     }
 )
 
-CheckFn = Callable[[Any], list[CheckResult]]
+CheckFn = Callable[[Any], CheckResults]
 
 # Подавление находки прямо в проверяемом файле: комментарий действует на
 # свою строку и на следующую, чтобы его можно было писать и в хвосте
@@ -160,10 +160,20 @@ def inline_suppressions(path: Path) -> dict[int, set[str]]:
 
 
 def _is_suppressed(finding: Finding, suppressions: dict[int, set[str]]) -> bool:
-    if finding.line is None or finding.line not in suppressions:
-        return False
-    rules = suppressions[finding.line]
-    return not rules or _matches_rule(finding.rule.id, rules)
+    """Подавлена ли находка комментарием в самом файле.
+
+    Смотрим и на строку нарушающей директивы, и на остальные строки, к
+    которым находка относится: комментарий пишут у самой директивы
+    ('ports:'), у конкретного элемента внутри неё и на заголовке сервиса
+    ('db:' — вывести сервис целиком). Все три формы задокументированы.
+    """
+    for lineno in (finding.line, *finding.suppress_lines):
+        if lineno is None or lineno not in suppressions:
+            continue
+        rules = suppressions[lineno]
+        if not rules or _matches_rule(finding.rule.id, rules):
+            return True
+    return False
 
 
 def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
@@ -171,12 +181,22 @@ def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
     return _matches_any(name, patterns) or _matches_any(relative, patterns)
 
 
-def _candidate_files(root: Path, exclude: Sequence[str]) -> list[Path]:
+def _candidate_files(
+    root: Path, exclude: Sequence[str], on_error: Callable[[OSError], None] | None = None
+) -> list[Path]:
     if root.is_file():
         return [root]
 
+    # os.walk по умолчанию молча проглатывает ошибки листинга: каталог
+    # без прав давал ноль находок, ноль ошибок и код возврата 0. Для
+    # инструмента, отчёт которого читают как «проверено всё», это худший
+    # из возможных вариантов — теперь такой каталог попадает в errors.
+    def _report(error: OSError) -> None:
+        if on_error is not None:
+            on_error(error)
+
     candidates: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_report):
         current = Path(dirpath)
         # Обрезаем дерево на месте: в node_modules и .git незачем заходить.
         dirnames[:] = [
@@ -194,7 +214,11 @@ def _candidate_files(root: Path, exclude: Sequence[str]) -> list[Path]:
     return candidates
 
 
-def discover_files(root: Path, exclude: Sequence[str] = ()) -> dict[str, list[Path]]:
+def discover_files(
+    root: Path,
+    exclude: Sequence[str] = (),
+    on_error: Callable[[OSError], None] | None = None,
+) -> dict[str, list[Path]]:
     found: dict[str, list[Path]] = {
         "compose": [],
         "pg_hba": [],
@@ -204,7 +228,7 @@ def discover_files(root: Path, exclude: Sequence[str] = ()) -> dict[str, list[Pa
         "dockerfile": [],
     }
 
-    for path in _candidate_files(root, exclude):
+    for path in _candidate_files(root, exclude, on_error):
         name = path.name
         if _matches_any(name, COMPOSE_FILE_PATTERNS):
             found["compose"].append(path)
@@ -221,6 +245,24 @@ def discover_files(root: Path, exclude: Sequence[str] = ()) -> dict[str, list[Pa
     return found
 
 
+def _describe(exc: Exception) -> str:
+    return " ".join(f"{type(exc).__name__}: {exc}".split())
+
+
+def _finding(rule: Rule, path: Path, item: CheckResult) -> Finding:
+    """Собирает Finding из 3- или 4-элементного результата проверки."""
+    location, detail, line = item[0], item[1], item[2]
+    suppress_lines = item[3] if len(item) > 3 else ()
+    return Finding(
+        rule=rule,
+        file=str(path),
+        location=location,
+        detail=detail,
+        line=line,
+        suppress_lines=tuple(suppress_lines or ()),
+    )
+
+
 def _run_registry(
     result: ScanResult,
     paths: list[Path],
@@ -234,17 +276,30 @@ def _run_registry(
         # текстовый юнит systemd.
         try:
             data = parse(path)
-            file_findings = [
-                Finding(rule=rule, file=str(path), location=location, detail=detail, line=line)
-                for rule in rules
-                if (check_fn := registry.get(rule.id)) is not None
-                for location, detail, line in check_fn(data)
-            ]
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
             result.errors.append(
-                ScanError(file=str(path), message=" ".join(f"{type(exc).__name__}: {exc}".split()))
+                ScanError(file=str(path), message=f"не удалось разобрать: {_describe(exc)}")
             )
             continue
+
+        # Проверки ловятся по одной, а не всем блоком: раньше падение
+        # любой из них уничтожало уже найденное по этому файлу другими
+        # правилами и записывалось как ошибка разбора — то есть баг
+        # инструмента выглядел как проблема проверяемого файла.
+        file_findings: list[Finding] = []
+        for rule in rules:
+            check_fn = registry.get(rule.id)
+            if check_fn is None:
+                continue
+            try:
+                file_findings.extend(_finding(rule, path, item) for item in check_fn(data))
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(
+                    ScanError(
+                        file=str(path),
+                        message=f"сбой проверки {rule.id}: {_describe(exc)}",
+                    )
+                )
 
         suppressions = inline_suppressions(path)
         kept = [f for f in file_findings if not _is_suppressed(f, suppressions)]
@@ -264,8 +319,15 @@ def scan(
     for rule in filter_rules(load_rules(rules_dir), select, ignore):
         rules_by_target.setdefault(rule.target, []).append(rule)
 
-    files = discover_files(root, exclude)
     result = ScanResult()
+
+    def _walk_error(error: OSError) -> None:
+        target = getattr(error, "filename", None) or str(root)
+        result.errors.append(
+            ScanError(file=str(target), message=f"не удалось обойти каталог: {_describe(error)}")
+        )
+
+    files = discover_files(root, exclude, _walk_error)
 
     registries: list[tuple[str, Mapping[str, CheckFn], Callable[[Path], Any]]] = [
         ("compose", compose_checks.REGISTRY, parse_compose),

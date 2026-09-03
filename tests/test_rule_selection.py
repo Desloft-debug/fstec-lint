@@ -119,7 +119,7 @@ def test_suppression_map_covers_own_and_next_line(tmp_path):
     assert suppressions[3] == {"C001"}
 
 
-def test_cli_reports_suppressed_and_unknown_patterns(tmp_path, capsys):
+def test_cli_reports_suppressed_count(tmp_path, capsys):
     _write(
         tmp_path,
         """services:
@@ -129,8 +129,21 @@ def test_cli_reports_suppressed_and_unknown_patterns(tmp_path, capsys):
 """,
     )
 
-    main([str(tmp_path), "--fail-on", "none", "--ignore", "НЕТ-ТАКОГО"])
+    main([str(tmp_path), "--fail-on", "none"])
 
-    err = capsys.readouterr().err
-    assert "подавлено комментариями в файлах: 1" in err
-    assert "--ignore НЕТ-ТАКОГО — нет правил с таким id" in err
+    assert "подавлено комментариями в файлах: 1" in capsys.readouterr().err
+
+
+def test_unknown_rule_pattern_is_a_usage_error(tmp_path, capsys):
+    """Опечатка в --select/--ignore не должна давать зелёный прогон.
+
+    Раньше о ней предупреждали в stderr, но код возврата оставался 0:
+    'fstec-lint . --select C00l' проверял ноль правил и выглядел как
+    успешный аудит.
+    """
+    _write(tmp_path, "services:\n  db:\n    image: postgres:latest\n    privileged: true\n")
+
+    code = main([str(tmp_path), "--fail-on", "none", "--ignore", "НЕТ-ТАКОГО"])
+
+    assert code == 2
+    assert "--ignore НЕТ-ТАКОГО — нет правил с таким id" in capsys.readouterr().err

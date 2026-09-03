@@ -13,13 +13,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]"
+      # Версии инструментов зафиксированы в constraints.txt: без этого
+      # сборка ломается от чужого релиза, а «проверено ruff/mypy» перестаёт
+      # быть воспроизводимым утверждением.
+      - run: pip install -e ".[dev]" -c constraints.txt
       - name: ruff check
         run: ruff check fstec_lint tests
       - name: ruff format --check
         run: ruff format --check fstec_lint tests
       - name: mypy
-        run: mypy fstec_lint --ignore-missing-imports
+        run: mypy fstec_lint
 
   test:
     runs-on: ubuntu-latest
@@ -31,8 +34,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
-      - run: pytest -v
+      - run: pip install -e ".[dev]" -c constraints.txt
+      - run: pytest -v --cov=fstec_lint --cov-report=term-missing
 
   self-scan:
     runs-on: ubuntu-latest
@@ -47,3 +50,12 @@ jobs:
         run: fstec-lint examples/vulnerable-stack --fail-on none
       - name: Сканирование защищённого стенда (обязан пройти)
         run: fstec-lint examples/hardened-stack --fail-on high
+      # Стенды — это ещё и проверка кодов возврата: гейт, который не
+      # падает на заведомо уязвимой конфигурации, бесполезен.
+      - name: Уязвимый стенд обязан дать код 1
+        run: |
+          set +e
+          fstec-lint examples/vulnerable-stack --fail-on high >/dev/null
+          code=$?
+          set -e
+          test "$code" -eq 1 || { echo "ожидался код 1, получен $code"; exit 1; }
