@@ -47,11 +47,31 @@ sshd_config, юниты systemd) с привязкой каждого из **40 
   **всё ещё не зарегистрирован в Минюсте**, то есть дата вступления в
   силу сдвигается.
 
-Практический вывод: коды мер (ИАФ, УПД, ЗСВ и т.д.) в большинстве своём
-сохранились между старой и новой базой, поэтому маппинг находок остаётся
-осмысленным, но как только новый приказ взамен №21 будет официально
-издан — потребуется актуализировать `fstec_lint/rules/*.yaml`. Это
-осознанно оставлено первым пунктом раздела «Дальше» в Roadmap.
+### Статус кодов мер в правилах
+
+> Коды мер в `rules/*.yaml` проставлены по приказу ФСТЭК России № 17
+> (утратил силу 01.03.2026). Приказ № 117 и методический документ к нему
+> изменили состав и нумерацию мер; соответствие кодов не сверено. Поле
+> `orders` в текущем виде отражает историческую привязку и не является
+> утверждением о соответствии действующим требованиям.
+
+Переустановка кодов ждёт перечня подмер из методического документа —
+пересказ вместо таблицы здесь хуже, чем отсутствие таблицы. Что каждое
+правило проверяет фактически, без нормативных утверждений, описано в
+[`docs/rules-subjects.md`](docs/rules-subjects.md): по этой таблице
+привязка восстанавливается сопоставлением списков, когда документ будет
+на руках.
+
+Практический вывод: сохранились ли коды мер между старой и новой базой —
+вопрос открытый, и утверждение «в большинстве своём сохранились» из
+прошлых редакций этого README снято как непроверенное. Обзоры приказа
+№117 расходятся даже в числе групп мер, поэтому нумерация правил
+переустанавливается по методическому документу, а не по пересказам.
+Актуализация `fstec_lint/rules/*.yaml` — первый пункт раздела «Дальше» в
+Roadmap.
+
+Ссылки ниже — обзоры, а не источник данных для правил: ни одно значение
+в `rules/*.yaml` по ним не проставляется.
 
 Источники: [CISOClub о новом приказе ФСТЭК взамен №21](https://cisoclub.ru/fstjek-rossii-gotovit-otmenu-prikaza-21-i-novuju-sistemu-zashhity-personalnyh-dannyh/), [обзор приказа №117 (Angara Security)](https://www.angarasecurity.ru/stati/analiz-prikaza-fstek-rossii-117/), [BI.ZONE о группах мер приказа №117](https://bi.zone/expertise/insights/prikaz-fstek-rossii-117-novyy-etap-zashchity-informatsii-v-gossektore/).
 
@@ -506,10 +526,14 @@ pytest -v
 
 ### Дальше
 
-- [ ] Актуализировать номера мер после официальной публикации приказа
-      взамен №21 (проект от 24.07.2026, см. «Правовой статус» — статус
-      перепроверяется периодически, на 01.09.2026 приказ всё ещё не
-      зарегистрирован в Минюсте)
+- [ ] Переустановить коды мер по методическому документу к приказу №117
+      (см. «Статус кодов мер в правилах»). Блокирует всё остальное по
+      нормативной части: перечень подмер и распределение по классам
+      берутся из оригинала документа, не из обзоров. Вход для сопоставления
+      готов — [`docs/rules-subjects.md`](docs/rules-subjects.md)
+- [ ] Отдельно — привязка для ПДн после публикации приказа взамен №21
+      (проект от 24.07.2026, см. «Правовой статус»; на 01.09.2026 приказ
+      всё ещё не зарегистрирован в Минюсте)
 - [ ] Класс ГИС / уровень защищённости ПДн как входной параметр и отчёт
       «требуемая мера → покрыта / нарушена / статикой не проверяется».
       Механика тут простая, а вот содержимое — нет: нужен выверенный
@@ -559,6 +583,15 @@ as of this writing it still has not been registered with the Ministry of
 Justice, so that date is slipping. See the Russian "Правовой статус"
 section above for sources and details — every rule carries an `orders`
 field pointing to the specific document(s) it maps to.
+
+**Measure codes are stale.** The codes in `rules/*.yaml` follow FSTEC
+Order No. 17, which was repealed on 2026-03-01. Order No. 117 and its
+accompanying methodology document changed both the composition and the
+numbering of measures; the codes have not been reconciled. The `orders`
+field currently records a historical mapping and is not a claim of
+conformance with the requirements in force. What each rule actually
+checks, stated without any regulatory claims, is in
+[`docs/rules-subjects.md`](docs/rules-subjects.md).
 
 **Disclaimer:** this tool helps you prepare for and self-check against
 compliance requirements; it does not replace formal certification and is

@@ -2,6 +2,7 @@
 разных файлах, и правило без функции (или наоборот) молча ничего не делает."""
 
 from collections import Counter
+from pathlib import Path
 
 from fstec_lint.checks import (
     compose_checks,
@@ -55,3 +56,15 @@ def test_rules_have_required_metadata():
         assert rule.description, f"{rule.id}: пустое описание"
         assert rule.remediation, f"{rule.id}: нет рекомендации по исправлению"
         assert rule.orders, f"{rule.id}: не указано, к какому приказу относится правило"
+
+
+def test_every_rule_is_described_in_subjects_table():
+    """Таблица «правило → предмет» — вход для переустановки кодов мер.
+
+    Правило, которого в ней нет, при миграции просто потеряется.
+    """
+    table = (Path(__file__).resolve().parent.parent / "docs" / "rules-subjects.md").read_text(
+        encoding="utf-8"
+    )
+    missing = [rule.id for rule in load_rules() if f"| {rule.id} |" not in table]
+    assert missing == [], f"нет строки в docs/rules-subjects.md: {missing}"
