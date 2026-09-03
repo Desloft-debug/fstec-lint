@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from .. import vulnclass
 from ..models import Finding, Severity
 
 NOT_DETERMINED = "не определяется статическим анализом конфигурации"
@@ -32,9 +33,10 @@ SEVERITY_LABEL = {
     Severity.LOW: "низкий уровень опасности",
 }
 
-# Класс уязвимости по ГОСТ Р 56546 (п. 5.2.6). Инструмент разбирает
-# конфигурационные файлы, поэтому класс у всех находок один.
-VULNERABILITY_CLASS = "уязвимость конфигурации"
+# Класс уязвимости (п. 5.2.6) и место возникновения (п. 5.2.12) —
+# по ГОСТ Р 56546, пункты 5.1 и 5.3.
+VULNERABILITY_CLASS = vulnclass.CONFIGURATION_CLASS
+VULNERABILITY_LOCATION = vulnclass.SYSTEM_SOFTWARE
 
 TARGET_SOFTWARE = {
     "compose": "Docker Compose (файл описания развёртывания)",
@@ -91,7 +93,10 @@ def _passport(finding: Finding, index: int, today: date) -> list[str]:
         ("Служба (порт), которую(ый) используют для функционирования ПО", _service_port(finding)),
         ("Язык программирования ПО", NOT_DETERMINED),
         ("Тип недостатка", rule.weakness_type),
-        ("Место возникновения (проявления) уязвимости", f"Уязвимость в конфигурации: {where}"),
+        (
+            "Место возникновения (проявления) уязвимости",
+            f"{VULNERABILITY_LOCATION}; {where}",
+        ),
         ("Идентификатор типа недостатка", rule.cwe),
         ("Наименование операционной системы и тип аппаратной платформы", NOT_DETERMINED),
         ("Дата выявления уязвимости", today.strftime("%d/%m/%Y")),
