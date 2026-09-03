@@ -144,15 +144,23 @@ def test_methodology_group_is_one_of_the_known_groups():
         )
 
 
-def test_rules_without_a_methodology_group_are_the_expected_ones():
-    """Пустая группа — сознательное решение, а не забытое поле.
-
-    В имеющейся выписке из методического документа есть только группы,
-    относящиеся к конфигурации, архитектуре и развёртыванию. Правила про
-    регистрацию событий и шифрование каналов в них не попадают, и
-    натягивать на них ближайшую группу нельзя: привязка перестанет
-    быть проверяемой.
-    """
+def test_every_rule_has_a_methodology_group():
+    """Пустых групп не осталось: РСБ и ЗТС закрыли последние три правила."""
     ungrouped = {rule.id for rule in load_rules() if not rule.methodology}
 
-    assert ungrouped == {"P004", "P005", "P007"}
+    assert ungrouped == set()
+
+
+def test_logging_and_channel_rules_are_not_swapped():
+    """P005 — шифрование канала, P007 — аудит операций, не наоборот.
+
+    Правила легко перепутать по названиям: у обоих в заголовке слово из
+    соседней области. Судить нужно по предмету проверки: P005 смотрит
+    'ssl', то есть защиту канала передачи данных, а P007 — 'log_statement',
+    то есть регистрацию событий.
+    """
+    groups = {rule.id: rule.methodology for rule in load_rules()}
+
+    assert groups["P004"] == "РСБ"
+    assert groups["P007"] == "РСБ"
+    assert groups["P005"] == "ЗТС"
