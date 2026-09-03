@@ -90,6 +90,8 @@ def render_json(rules: list[Rule]) -> str:
                 "measure": rule.measure,
                 "measure_title": rule.measure_title,
                 "measure_groups": measure_groups(rule),
+                "methodology": rule.methodology,
+                "methodology_title": rule.methodology_title,
                 "legacy_measure": rule.legacy_measure,
                 "orders": rule.orders,
                 "description": rule.description,

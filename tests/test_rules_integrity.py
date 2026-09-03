@@ -129,3 +129,30 @@ def test_container_rules_are_anchored_to_the_container_measure():
     anchored = {rule.id for rule in load_rules() if rule.measure == "п. 63 д)"}
 
     assert {"C002", "C003", "C008", "C009", "C015"} <= anchored
+
+
+def test_methodology_group_is_one_of_the_known_groups():
+    """Группа методического документа не выдумывается на месте."""
+    for rule in load_rules():
+        if not rule.methodology:
+            continue
+        assert rule.methodology in measures.METHODOLOGY_GROUPS, (
+            f"{rule.id}: неизвестная группа мер '{rule.methodology}'"
+        )
+        assert rule.methodology_title == measures.METHODOLOGY_GROUPS[rule.methodology], (
+            f"{rule.id}: наименование группы разошлось с методическим документом"
+        )
+
+
+def test_rules_without_a_methodology_group_are_the_expected_ones():
+    """Пустая группа — сознательное решение, а не забытое поле.
+
+    В имеющейся выписке из методического документа есть только группы,
+    относящиеся к конфигурации, архитектуре и развёртыванию. Правила про
+    регистрацию событий и шифрование каналов в них не попадают, и
+    натягивать на них ближайшую группу нельзя: привязка перестанет
+    быть проверяемой.
+    """
+    ungrouped = {rule.id for rule in load_rules() if not rule.methodology}
+
+    assert ungrouped == {"P004", "P005", "P007"}
