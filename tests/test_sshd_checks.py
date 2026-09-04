@@ -112,5 +112,5 @@ def test_several_match_blocks_are_all_checked(tmp_path):
 def test_global_defaults_still_apply_without_match_blocks(tmp_path):
     config = _config(tmp_path, "Port 22\n")
 
-    # PasswordAuthentication по умолчанию yes — отсутствие директивы это не безопасность
+    # PasswordAuthentication по умолчанию yes: отсутствие директивы это не безопасность
     assert len(sc.check_password_authentication(config)) == 1
