@@ -135,12 +135,7 @@ def test_cli_reports_suppressed_count(tmp_path, capsys):
 
 
 def test_unknown_rule_pattern_is_a_usage_error(tmp_path, capsys):
-    """Опечатка в --select/--ignore не должна давать зелёный прогон.
-
-    Раньше о ней предупреждали в stderr, но код возврата оставался 0:
-    'fstec-lint . --select C00l' проверял ноль правил и выглядел как
-    успешный аудит.
-    """
+    """Опечатка в --select/--ignore не должна давать зелёный прогон."""
     _write(tmp_path, "services:\n  db:\n    image: postgres:latest\n    privileged: true\n")
 
     code = main([str(tmp_path), "--fail-on", "none", "--ignore", "НЕТ-ТАКОГО"])

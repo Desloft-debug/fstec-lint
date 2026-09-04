@@ -37,12 +37,7 @@ def _write(path: Path, text: str) -> Path:
     ],
 )
 def test_shell_shift_and_here_string_do_not_swallow_the_file(tmp_path, command):
-    """Неоткрытый heredoc не должен съедать остаток Dockerfile.
-
-    Ограничитель, которого нет в файле, раньше уводил все последующие
-    инструкции в аргументы RUN: USER и HEALTHCHECK пропадали из разбора,
-    и D001/D006 срабатывали на образе, где они есть.
-    """
+    """Неоткрытый heredoc не должен съедать остаток Dockerfile."""
     path = _write(
         tmp_path / "Dockerfile",
         f"FROM alpine:3.20\nRUN {command}\nUSER appuser\nHEALTHCHECK CMD true\n",
@@ -80,12 +75,7 @@ def test_curl_pipe_shell_inside_heredoc_is_still_detected(tmp_path):
 
 
 def test_comment_inside_line_continuation_keeps_the_command_whole(tmp_path):
-    """Docker отбрасывает такой комментарий и продолжает инструкцию.
-
-    Парсер вместо этого обрывал RUN на комментарии, а хвост команды
-    становился отдельной «инструкцией» — D005 на curl | bash после
-    комментария не срабатывал.
-    """
+    """Docker отбрасывает такой комментарий и продолжает инструкцию."""
     path = _write(
         tmp_path / "Dockerfile",
         "FROM alpine:3.20\n"
@@ -118,11 +108,7 @@ def test_curl_pipe_shell_after_a_comment_line_is_detected(tmp_path):
 
 
 def test_deselected_target_is_not_parsed_at_all(tmp_path):
-    """Битый файл типа, все правила которого отключены, не роняет прогон.
-
-    Иначе --select/--ignore не спасали: файл всё равно разбирался,
-    попадал в errors и уводил CI в код возврата 3.
-    """
+    """Битый файл типа, все правила которого отключены, не роняет прогон."""
     (tmp_path / "Dockerfile").write_bytes(b"\xff\xfe binary")
     _write(tmp_path / "docker-compose.yml", "services:\n  db:\n    image: postgres:16.4\n")
 
@@ -149,12 +135,7 @@ def test_deselected_target_does_not_force_exit_code_3(tmp_path, capsys):
 
 
 def test_blanket_ignore_is_not_narrowed_by_a_specific_one(tmp_path):
-    """'# fstec-lint: ignore' сверху глушит строку целиком.
-
-    Точечный список на самой строке раньше сужал его до себя: пустое
-    множество означает «любое правило», а .update() превращал его в
-    перечень.
-    """
+    """'# fstec-lint: ignore' сверху глушит строку целиком."""
     path = _write(
         tmp_path / "docker-compose.yml",
         "services:\n"

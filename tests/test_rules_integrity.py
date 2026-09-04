@@ -61,10 +61,7 @@ def test_rules_have_required_metadata():
 
 
 def test_every_rule_is_described_in_subjects_table():
-    """Таблица «правило → предмет» — вход для переустановки кодов мер.
-
-    Правило, которого в ней нет, при миграции просто потеряется.
-    """
+    """Таблица «правило → предмет» — вход для переустановки кодов мер."""
     table = (Path(__file__).resolve().parent.parent / "docs" / "rules-subjects.md").read_text(
         encoding="utf-8"
     )
@@ -78,12 +75,7 @@ _MEASURE_RE = re.compile(r"^п\. (\d+) ([а-яё])\)$")
 
 
 def test_every_rule_cites_an_existing_clause_of_order_117():
-    """`measure` обязан ссылаться на реально существующий подпункт.
-
-    Это машинная проверка того, что раньше было утверждением на веру:
-    коды вида ЗСВ.2 брались из приложения к приказу N 17, а после его
-    отмены сверить их было не с чем.
-    """
+    """`measure` обязан ссылаться на реально существующий подпункт."""
     for rule in load_rules():
         match = _MEASURE_RE.match(rule.measure)
         assert match is not None, (
@@ -105,12 +97,7 @@ def test_measure_title_matches_the_wording_of_the_order():
 
 
 def test_no_rule_claims_a_code_from_the_repealed_order():
-    """Коды вида ЗСВ.2 остаются только в legacy_measure.
-
-    Приказ N 17 утратил силу 01.03.2026; ссылка на его код в поле
-    `measure` читалась бы как утверждение о соответствии действующим
-    требованиям.
-    """
+    """Коды вида ЗСВ.2 — это приказ N 21, в measure им не место."""
     for rule in load_rules():
         assert not re.search(r"[А-ЯЁ]{2,}\.\d", rule.measure), (
             f"{rule.id}: код утратившего силу приказа N 17 в поле measure"
@@ -119,25 +106,14 @@ def test_no_rule_claims_a_code_from_the_repealed_order():
 
 
 def test_container_rules_are_anchored_to_the_container_measure():
-    """Меры контейнерных сред — п. 63 д), это прямое попадание в предмет.
-
-    Проверка нужна, чтобы при правках привязки не размылось главное:
-    приказ N 117 впервые выделил защиту контейнерных сред и оркестрации
-    отдельной базовой мерой, и правила про сам контейнер должны стоять
-    именно на ней.
-    """
+    """Меры контейнерных сред — п. 63 д), это прямое попадание в предмет."""
     anchored = {rule.id for rule in load_rules() if rule.measure == "п. 63 д)"}
 
     assert {"C002", "C003", "C008", "C009", "C015"} <= anchored
 
 
 def test_submeasure_exists_in_the_methodology_catalogue():
-    """Подмера обязана существовать в методическом документе.
-
-    Раньше привязка велась на уровне придуманной группы, потому что
-    каталога подмер на руках не было. Теперь есть, и ссылку можно
-    проверить машинно.
-    """
+    """Подмера обязана существовать в методическом документе."""
     for rule in load_rules():
         assert rule.submeasure in measures.SUBMEASURES, (
             f"{rule.id}: подмеры '{rule.submeasure}' нет в каталоге"
@@ -164,11 +140,7 @@ def test_submeasure_group_is_a_real_group():
 
 
 def test_container_rules_use_the_container_submeasures():
-    """Правила про сам контейнер стоят в группе ЗКО, а не в общей ЗСВ.
-
-    До методического документа 2026 года отдельной группы под контейнеры
-    не было, и такие находки привязывались к защите среды виртуализации.
-    """
+    """Правила про сам контейнер стоят в группе ЗКО, а не в общей ЗСВ."""
     zko = {rule.id for rule in load_rules() if measures.submeasure_group(rule.submeasure) == "ЗКО"}
 
     assert {"C002", "C003", "C008", "C009", "C015", "D001", "D003"} <= zko
@@ -190,12 +162,7 @@ def test_logging_and_channel_rules_are_not_swapped():
 
 
 def test_gost_terms_used_in_rules_are_defined():
-    """Термин ГОСТа в тексте правила должен быть выписан в terms.py.
-
-    Предмет группы ЗКО задан приказом N 117 через ГОСТ Р 70860-2023,
-    поэтому ссылки на его пункты — часть нормативной привязки, а не
-    украшение: они должны указывать на существующее определение.
-    """
+    """Термин ГОСТа в тексте правила должен быть выписан в terms.py."""
     text = " ".join(f"{rule.description} {rule.remediation}" for rule in load_rules())
     cited = set(re.findall(r"ГОСТ Р 70860-2023,\s*п\.\s*(\d+\.\d+(?:\.\d+)?)", text))
     known = {clause for clause, _ in terms.DEFINITIONS.values()} | set(terms.CITED_CLAUSES)
@@ -205,13 +172,7 @@ def test_gost_terms_used_in_rules_are_defined():
 
 
 def test_gost_58833_citations_point_at_known_clauses():
-    """Ссылка на ГОСТ Р 58833-2020 должна вести на описанный пункт.
-
-    Раздел 7.2 стандарта связывает вид аутентификации с уровнем доверия
-    к её результатам напрямую — это нормативное основание severity
-    правил об аутентификации, а не оценочное суждение, и ссылки на него
-    обязаны быть точными.
-    """
+    """Ссылка на ГОСТ Р 58833-2020 должна вести на описанный пункт."""
     text = " ".join(rule.description for rule in load_rules())
     cited = set(re.findall(r"ГОСТ Р 58833-2020,\s*п\.\s*(\d+\.\d+)", text))
     known = {kind.clause for kind in auth.KINDS.values()} | {

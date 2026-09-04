@@ -21,11 +21,7 @@ def _rule(rule_id="X001", measure="п. 63 д)", target="compose"):
 
 
 def test_measure_groups_reads_clauses_of_order_117():
-    """Покрытие считается по пунктам приказа N 117, а не по кодам N 17.
-
-    Кодов вида ЗСВ.2 в действующем приказе нет — они остались в
-    приложении к утратившему силу N 17.
-    """
+    """Покрытие считается по пунктам приказа N 117, а не по кодам N 17."""
     assert rules_catalog.measure_groups(_rule(measure="п. 63 д)")) == ["п. 63 д)"]
     assert rules_catalog.measure_groups(_rule(measure="п. 34 б)")) == ["п. 34 б)"]
 
