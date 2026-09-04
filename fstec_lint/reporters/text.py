@@ -29,6 +29,10 @@ def render(findings: list[Finding]) -> str:
             lines.append(
                 f"       подмера: {finding.rule.submeasure} — {finding.rule.submeasure_title}"
             )
+        if finding.rule.pdn_measure:
+            lines.append(
+                f"       ПДн:  {finding.rule.pdn_measure} — {finding.rule.pdn_measure_title}"
+            )
         if finding.rule.activity:
             lines.append(f"       процесс: {finding.rule.activity} — {finding.rule.activity_title}")
         if finding.rule.orders:

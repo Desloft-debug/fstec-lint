@@ -18,6 +18,7 @@ from .parsers.dockerfile import parse_dockerfile
 from .parsers.postgres import parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
 from .parsers.systemd import parse_systemd_unit
+from .pdn import in_base_set
 
 RULES_DIR = Path(__file__).parent / "rules"
 
@@ -102,7 +103,8 @@ def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
                     activity_title=item.get("activity_title", ""),
                     cwe=item.get("cwe", ""),
                     weakness_type=item.get("weakness_type", ""),
-                    legacy_measure=item.get("legacy_measure", ""),
+                    pdn_measure=item.get("pdn_measure", ""),
+                    pdn_measure_title=item.get("pdn_measure_title", ""),
                 )
             )
     return rules
@@ -126,6 +128,20 @@ def filter_rules(
     if ignore:
         rules = [rule for rule in rules if not _matches_rule(rule.id, ignore)]
     return rules
+
+
+def filter_by_uz(rules: list[Rule], level: int | None) -> list[Rule]:
+    """Оставляет правила, чья мера входит в базовый набор для уровня УЗ.
+
+    Базовые наборы заданы приложением к приказу ФСТЭК N 21 (столбцы
+    УЗ4–УЗ1). Мера, не отмеченная там, применяется при адаптации набора
+    или как компенсирующая (пункты 9 и 10 приказа), поэтому фильтр
+    сужает проверку до базового набора и ничего не утверждает о
+    неприменимости остальных правил.
+    """
+    if level is None:
+        return rules
+    return [rule for rule in rules if in_base_set(rule.pdn_measure, level)]
 
 
 def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
@@ -320,10 +336,11 @@ def scan(
     exclude: Sequence[str] = (),
     select: Sequence[str] = (),
     ignore: Sequence[str] = (),
+    uz: int | None = None,
 ) -> ScanResult:
     """Сканирует root и возвращает находки (по убыванию severity) и ошибки разбора."""
     rules_by_target: dict[str, list[Rule]] = {}
-    for rule in filter_rules(load_rules(rules_dir), select, ignore):
+    for rule in filter_by_uz(filter_rules(load_rules(rules_dir), select, ignore), uz):
         rules_by_target.setdefault(rule.target, []).append(rule)
 
     result = ScanResult()

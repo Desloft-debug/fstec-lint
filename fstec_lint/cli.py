@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import __version__
 from . import baseline as baseline_module
-from .engine import filter_rules, load_rules, scan, unknown_patterns
+from .engine import filter_by_uz, filter_rules, load_rules, scan, unknown_patterns
 from .models import Rule, Severity
 from .reporters import html, json_reporter, passport, rules_catalog, sarif, text
 
@@ -78,6 +78,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--uz",
+        type=int,
+        choices=[1, 2, 3, 4],
+        metavar="LEVEL",
+        help=(
+            "проверять только правила из базового набора мер для уровня "
+            "защищённости ПДн (приложение к приказу ФСТЭК №21): 1 — самый "
+            "высокий. Остальные меры применяются при адаптации набора"
+        ),
+    )
+    parser.add_argument(
         "--baseline",
         metavar="FILE",
         help="не сообщать о находках, перечисленных в baseline-файле (падать только на новых)",
@@ -143,7 +154,7 @@ def _run(argv: list[str] | None) -> int:
         return 2
 
     if args.list_rules:
-        rules = filter_rules(all_rules, select, ignore)
+        rules = filter_by_uz(filter_rules(all_rules, select, ignore), args.uz)
         if args.format == "json":
             _write(rules_catalog.render_json(rules), args.output)
         else:
@@ -161,7 +172,7 @@ def _run(argv: list[str] | None) -> int:
         print(f"fstec-lint: путь не найден: {root}", file=sys.stderr)
         return 2
 
-    result = scan(root, exclude=args.exclude, select=select, ignore=ignore)
+    result = scan(root, exclude=args.exclude, select=select, ignore=ignore, uz=args.uz)
     findings = result.findings
 
     for error in result.errors:
