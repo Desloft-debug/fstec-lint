@@ -133,7 +133,8 @@ N 117 таких кодов **нет вообще**. Вместо фиксиро
 Группа **ЗКО** («Защита технологий контейнерных сред и их оркестрации»,
 8 подмер) появилась именно в методическом документе 2026 года. До него
 находки про контейнеры привязывались к защите среды виртуализации
-`ЗСВ` — этот код и стоит в `legacy_measure` большинства правил Compose.
+`ЗСВ` — по приказу N 21 этот код и стоит в `pdn_measure` большинства
+правил Compose.
 
 Предмет группы `ЗКО` задан не приказом и не методичкой, а
 **ГОСТ Р 70860-2023** «Информационные технологии. Облачные вычисления.
@@ -275,7 +276,7 @@ YAML: чтобы добавить новую меру или изменить т
 ## Установка
 
 ```bash
-pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
+pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.0.0"
 ```
 
 Или для разработки:
@@ -589,7 +590,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Desloft-debug/fstec-lint@main
+      - uses: Desloft-debug/fstec-lint@v1.0.0
         with:
           path: .
           format: html
@@ -648,7 +649,7 @@ baseline; `line` — номер строки для отчётов и SARIF. Р�
 - `mypy` в строгом режиме (`disallow_untyped_defs`) — статическая проверка типов;
 - `pip-audit` — композиционный анализ зависимостей на известные уязвимости
   (ГОСТ Р 56939-2024, п. 5.16.2.3);
-- `pytest` на Python 3.10/3.11/3.12 — 244 теста при пороге покрытия 90%
+- `pytest` на Python 3.10/3.11/3.12 — 283 теста при пороге покрытия 90%
   (фактическое — 95%), включая юнит-тесты на каждое правило, end-to-end
   проверку обоих примеров-стендов, регрессию на каждый закрытый дефект
   разбора и проверку целостности каталога правил (у каждого правила из
@@ -712,7 +713,7 @@ pytest -v
       прогон (отдельный код выхода `3`), служебные каталоги вроде
       `node_modules` и `.git` пропускаются, остальное — через `--exclude`
 - [x] CI: `ruff`, `ruff format`, `mypy`, `pytest` на Python 3.10–3.12
-      и самосканирование обоих стендов; 244 теста, покрытие 95%
+      и самосканирование обоих стендов; 283 теста, покрытие 95%
 - [x] Границы разбора выписаны явно — [`docs/rules-subjects.md`](docs/rules-subjects.md),
       раздел «Что разбор не видит»: `Include` в `sshd_config`, `include`
       в `postgresql.conf`, `USER` внутри образа, подстановка переменных.
@@ -722,7 +723,7 @@ pytest -v
       в `fstec_lint/measures.py`, матрица трассировки —
       [`docs/measures-117.md`](docs/measures-117.md). Тесты не дают
       сослаться на несуществующий подпункт или разойтись с формулировкой
-      приказа; коды утратившего силу №17 сохранены в `legacy_measure`
+      приказа; привязка для ИСПДн — в `pdn_measure` по приказу №21
 
 ### Дальше
 
@@ -802,8 +803,8 @@ for К2, high for К1.
 Every rule cites the exact clause it maps to, verified against the text
 of the order by `tests/test_rules_integrity.py`: a rule cannot reference
 a non-existent item or drift from the order's wording. The old Order
-No. 17 codes are preserved in a `legacy_measure` field for traceability,
-not as a conformance claim. Full mapping matrix, reverse table, and the
+Order No. 21 remains in force for personal data, and its codes live in a
+`pdn_measure` field alongside. Full mapping matrix, reverse table, and the
 list of measures the tool does **not** cover:
 [`docs/measures-117.md`](docs/measures-117.md).
 
@@ -821,7 +822,7 @@ indicative — verify them against the current edition of the order and
 your own threat model before relying on them.
 
 **Code quality:** every push runs `ruff check`, `ruff format --check`,
-`mypy` and `pytest` (250 tests, 95% coverage) across Python
+`mypy` and `pytest` (283 tests, 95% coverage) across Python
 3.10–3.12, plus a self-scan of both example stacks as a pipeline smoke
 test.
 
@@ -840,7 +841,7 @@ are always skipped; anything else via `--exclude GLOB`.
 Quick start:
 
 ```bash
-pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git"
+pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.0.0"
 fstec-lint . --format html --output report.html --fail-on high
 fstec-lint --list-rules   # rule catalogue + which FSTEC measure groups it covers
 
