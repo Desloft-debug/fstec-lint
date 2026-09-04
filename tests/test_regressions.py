@@ -84,7 +84,7 @@ def test_comment_inside_line_continuation_keeps_the_command_whole(tmp_path):
 
     Парсер вместо этого обрывал RUN на комментарии, а хвост команды
     становился отдельной «инструкцией» — D005 на curl | bash после
-    комментария молчал.
+    комментария не срабатывал.
     """
     path = _write(
         tmp_path / "Dockerfile",
@@ -284,13 +284,7 @@ def test_list_rules_warns_when_the_format_is_not_supported(capsys):
 
 
 def test_scalar_instead_of_list_is_not_iterated_character_by_character(tmp_path):
-    """Строка вместо списка не должна обходиться по буквам.
-
-    'volumes: "/var/run/docker.sock:..."' — невалидный compose, но
-    посимвольный обход давал и ложные C015 (символ '/' как «смонтирован
-    корень хоста»), и молчаливый пропуск C008: ни одна буква не
-    совпадала с 'docker.sock'.
-    """
+    """Строка вместо списка не должна обходиться по буквам."""
     _write(
         tmp_path / "docker-compose.yml",
         "services:\n"
@@ -317,11 +311,7 @@ def test_scalar_volume_does_not_produce_a_finding_per_character(tmp_path):
 
 
 def test_pg_hba_address_with_separate_netmask_keeps_the_real_method(tmp_path):
-    """Форма «адрес маска» занимает два поля, метод стоит правее.
-
-    Раньше методом становилась маска, а настоящий 'trust' уезжал в
-    options — P001 молчал на записи, разрешающей вход без пароля.
-    """
+    """Форма «адрес маска» занимает два поля, метод стоит правее."""
     _write(
         tmp_path / "pg_hba.conf",
         "host    all   all   192.168.0.0   255.255.0.0   trust\n",
@@ -378,12 +368,7 @@ def test_postgresql_conf_single_word_line_invents_nothing(tmp_path):
 
 
 def test_suppression_works_on_the_offending_directive_line(tmp_path):
-    """Комментарий над нарушающей директивой, а не только над сервисом.
-
-    Находки compose числились на строке объявления сервиса, поэтому
-    '# fstec-lint: ignore C005' рядом с 'ports' молча не срабатывал —
-    ровно так, как этот случай описан в документации.
-    """
+    """Комментарий над директивой, а не только над заголовком сервиса."""
     _write(
         tmp_path / "docker-compose.yml",
         "services:\n"
@@ -460,12 +445,7 @@ def test_suppression_on_the_service_header_still_covers_the_whole_service(tmp_pa
 
 
 def test_findings_win_over_unreadable_files_in_the_exit_code(tmp_path, capsys):
-    """Код 3 не должен прятать нарушение.
-
-    Прогон с одним нечитаемым файлом и critical-находкой возвращал 3, и
-    гейт, различающий «нарушения» и «инструмент отработал не полностью»,
-    читал его как чистый.
-    """
+    """Код 3 не должен прятать нарушение: гейт прочтёт такой прогон как чистый."""
     _write(tmp_path / "Dockerfile", "FROM alpine:3.20\nRUN curl https://x | sh\nUSER app\n")
     (tmp_path / "broken.service").write_bytes(b"\x00\xff\xfe")
 
@@ -533,11 +513,7 @@ def test_real_substitution_is_not_reported(value):
 
 
 def test_truncated_dockerfile_location_stays_unique(tmp_path):
-    """Два разных длинных RUN с общим началом делили один адрес.
-
-    Адрес входит в отпечаток для baseline, поэтому одна запись глушила
-    обе находки.
-    """
+    """Два длинных RUN с общим началом делили адрес, и baseline глушил оба."""
     prefix = "curl -sSL https://example.test/very/long/path/that/repeats"
     _write(
         tmp_path / "Dockerfile",
