@@ -2,6 +2,7 @@ version: "3.8"
 
 services:
   db:
+    networks: [backend]
     image: postgres:16.4
     user: "999:999"
     read_only: true
@@ -32,6 +33,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   web:
+    networks: [backend, frontend]
     build: .
     image: myorg/web:1.4.2
     user: "1000:1000"
@@ -63,6 +65,11 @@ services:
 secrets:
   db_password:
     file: ./secrets/db_password.txt
+
+networks:
+  backend:
+    internal: true
+  frontend:
 
 volumes:
   pgdata:

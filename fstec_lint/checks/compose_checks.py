@@ -410,6 +410,19 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
     return findings
 
 
+def check_flat_network(compose: dict) -> CheckResults:
+    services = _services(compose)
+    if len(services) < 2:
+        return []
+    if any(isinstance(svc, dict) and svc.get("networks") for svc in services.values()):
+        return []
+    return [
+        (f"service:{name}", "сервис не подключён к именованной сети", _line(compose, name))
+        for name, svc in services.items()
+        if isinstance(svc, dict) and svc.get("network_mode") != "host"
+    ]
+
+
 ComposeCheck = Callable[[dict], CheckResults]
 
 
@@ -453,4 +466,5 @@ REGISTRY = {
     "C013": _service_scope(check_missing_healthcheck),
     "C014": _service_scope(check_debug_mode_enabled),
     "C015": _service_scope(check_sensitive_host_mount),
+    "C016": _service_scope(check_flat_network),
 }
