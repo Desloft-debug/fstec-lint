@@ -5,61 +5,43 @@ from typing import Any
 
 import yaml
 
-# Файл с именем docker-compose.yml, где нет ни одного из этих ключей, —
-# формат v1: сервисы лежат прямо в корне. Разбирать его как современный
-# значит выдать «нарушений не найдено» на непроверенном файле.
+# Если ни одного из этих ключей нет — формат v1, сервисы в корне.
 TOP_LEVEL_KEYS = frozenset(
     {"services", "version", "volumes", "networks", "configs", "secrets", "include", "name", "x-"}
 )
 
-# Раскрытие якорей ('billion laughs') PyYAML не грозит: safe_load
-# переиспользует собранный объект, а не копирует его. А вот просто
-# большой файл читается целиком в память, отсюда лимит.
+# Файл читается в память целиком, поэтому размер ограничен.
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
 
 class ComposeFile(dict[str, Any]):
-    """Разобранный compose-файл, помнящий строки объявлений.
+    """Разобранный compose-файл со строками сервисов и их ключей.
 
-    Номера строк берутся из узлов YAML (yaml.compose), а не из повторного
-    разбора текста регуляркой, поэтому совпадают с реальным файлом при
-    любых отступах и якорях.
-
-    Помимо строки самого сервиса хранится строка каждого его ключа:
-    находка о портах должна показывать строку 'ports', иначе подавляющий
-    комментарий, написанный над нарушающей директивой, не работает.
+    Строки берутся из узлов YAML (yaml.compose).
     """
 
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         super().__init__(data or {})
         self.service_lines: dict[str, int] = {}
-        # (сервис, ключ) -> (первая строка директивы, последняя строка её
-        # значения). Конец нужен подавлению: комментарий пишут не только
-        # у 'ports:', но и у конкретной строки внутри списка портов.
+        # (сервис, ключ) -> (первая и последняя строка директивы).
         self.key_spans: dict[tuple[str, str], tuple[int, int]] = {}
+        self.volume_lines: dict[str, int] = {}
+
+    def volume_line(self, name: str) -> int | None:
+        return self.volume_lines.get(name)
 
     def service_line(self, name: str) -> int | None:
         return self.service_lines.get(name)
 
     def key_line(self, service: str, *keys: str) -> int | None:
-        """Строка первого из перечисленных ключей сервиса, иначе — строка сервиса.
-
-        Проверка называет ключи, на которых она судит ('ports', 'volumes'),
-        и получает строку самого раннего из присутствующих. Если ни одного
-        нет (находка «директива отсутствует»), адресом остаётся объявление
-        сервиса — привязать её больше не к чему.
-        """
+        """Строка самого раннего из ключей сервиса, иначе строка сервиса."""
         starts = [
             span[0] for key in keys if (span := self.key_spans.get((service, key))) is not None
         ]
         return min(starts) if starts else self.service_lines.get(service)
 
     def suppression_lines(self, service: str, line: int | None) -> tuple[int, ...]:
-        """Строки, на которых комментарий гасит находку.
-
-        Заголовок сервиса плюс все строки директивы — чтобы работал и
-        комментарий у конкретного элемента списка.
-        """
+        """Строки для подавления: заголовок сервиса и все строки директивы."""
         lines: set[int] = set()
         if (header := self.service_lines.get(service)) is not None:
             lines.add(header)
@@ -70,19 +52,48 @@ class ComposeFile(dict[str, Any]):
         return tuple(sorted(lines))
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """SafeLoader с тегами слияния Compose: !reset и !override."""
+
+
+def _construct_reset(loader: yaml.SafeLoader, node: yaml.Node) -> None:
+    # !reset возвращает поле к значению по умолчанию, то есть «не задано».
+    return None
+
+
+def _construct_override(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
+    # !override заменяет значение из базового файла вместо слияния;
+    # для разбора одного файла это обычное значение.
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_scalar(node)
+
+
+_ComposeLoader.add_constructor("!reset", _construct_reset)
+_ComposeLoader.add_constructor("!override", _construct_override)
+
+
 def _mapping(node: object) -> list[tuple[Any, Any]]:
     return node.value if isinstance(node, yaml.MappingNode) else []
 
 
-def _line_marks(text: str) -> tuple[dict[str, int], dict[tuple[str, str], tuple[int, int]]]:
+def _line_marks(
+    text: str,
+) -> tuple[dict[str, int], dict[tuple[str, str], tuple[int, int]], dict[str, int]]:
     try:
         root = yaml.compose(text, Loader=yaml.SafeLoader)
     except yaml.YAMLError:
-        return {}, {}
+        return {}, {}, {}
 
     service_lines: dict[str, int] = {}
     key_spans: dict[tuple[str, str], tuple[int, int]] = {}
+    volume_lines: dict[str, int] = {}
     for key_node, value_node in _mapping(root):
+        if key_node.value == "volumes":
+            for volume_key, _ in _mapping(value_node):
+                volume_lines[str(volume_key.value)] = volume_key.start_mark.line + 1
         if key_node.value != "services":
             continue
         for service_key, service_value in _mapping(value_node):
@@ -96,7 +107,7 @@ def _line_marks(text: str) -> tuple[dict[str, int], dict[tuple[str, str], tuple[
                 # бы диапазон в две строки.
                 end = max(start, field_value.end_mark.line)
                 key_spans[(name, str(field_key.value))] = (start, end)
-    return service_lines, key_spans
+    return service_lines, key_spans, volume_lines
 
 
 def _guard_size(text: str) -> None:
@@ -124,10 +135,10 @@ def parse_compose(path: Path) -> ComposeFile:
     text = path.read_text(encoding="utf-8")
     _guard_size(text)
 
-    data = yaml.safe_load(text)
+    data = yaml.load(text, Loader=_ComposeLoader)  # наследник SafeLoader
     mapping = data if isinstance(data, dict) else {}
     _guard_schema(mapping)
 
     compose = ComposeFile(mapping)
-    compose.service_lines, compose.key_spans = _line_marks(text)
+    compose.service_lines, compose.key_spans, compose.volume_lines = _line_marks(text)
     return compose

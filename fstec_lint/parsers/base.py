@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path, PurePosixPath
+
+
+class SourceLine(int):
+    """Номер строки в подключённом файле (Include).
+
+    Ведёт себя как int, поэтому проверки передают его дальше как обычный
+    номер строки, а движок по атрибуту file относит находку к нужному файлу.
+    """
+
+    file: str
+
+    def __new__(cls, value: int, file: str) -> SourceLine:
+        obj = super().__new__(cls, value)
+        obj.file = file
+        return obj
+
 
 class ConfigMap(dict[str, str]):
-    """Словарь параметров конфига, помнящий строку, где задан каждый ключ.
-
-    Наследник dict, а не отдельная структура: проверки продолжают
-    работать с привычным settings.get(...), а номер строки доступен там,
-    где он нужен для отчёта (SARIF, text).
-    """
+    """dict параметров, который помнит строку каждого ключа."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -21,3 +33,25 @@ class ConfigMap(dict[str, str]):
 
     def line(self, key: str) -> int | None:
         return self.lines.get(key)
+
+
+def include_pattern(value: str, base: Path, system_dir: str) -> str | None:
+    """Путь директивы include в проверяемом дереве.
+
+    Относительный путь берётся от каталога основного файла (base).
+    Абсолютный используется как есть, если лежит внутри base; путь под
+    system_dir (например, /etc/nginx) переносится в base. Прочие
+    абсолютные пути указывают на файлы другой системы и не читаются.
+    """
+    path = PurePosixPath(value)
+    if not path.is_absolute():
+        return str(base / path)
+    try:
+        path.relative_to(base.resolve().as_posix())
+        return value
+    except ValueError:
+        pass
+    try:
+        return str(base / path.relative_to(system_dir))
+    except ValueError:
+        return None

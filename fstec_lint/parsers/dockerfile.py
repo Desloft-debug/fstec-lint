@@ -3,8 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Оператор heredoc, но не here-string '<<<': в 'grep x <<<"payload"'
-# начала heredoc нет, а тег там всё равно вычитывался.
+# Heredoc, но не here-string '<<<'.
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 # Docker принимает heredoc только у этих инструкций.
@@ -12,12 +11,9 @@ HEREDOC_INSTRUCTIONS = frozenset({"RUN", "COPY", "ADD"})
 
 
 def _heredoc_body(lines: list[str], index: int, buffer: str) -> tuple[list[str], int]:
-    """Тело heredoc-ов инструкции и позиция за последним ограничителем.
+    """Тело heredoc и позиция после ограничителя.
 
-    Ограничитель не встретился до конца файла — значит '<<' было частью
-    команды ('echo "a << b"'), а не началом heredoc. Тогда возвращаем
-    исходную позицию: иначе весь остаток файла уедет в аргументы одной
-    инструкции вместе со всеми находками, которые в нём были.
+    Если ограничитель не найден, '<<' считается частью команды.
     """
     body: list[str] = []
     cursor = index
@@ -39,9 +35,7 @@ def _heredoc_body(lines: list[str], index: int, buffer: str) -> tuple[list[str],
 def parse_dockerfile(path: Path) -> list[dict]:
     """Разбирает Dockerfile в список {instruction, args, line}.
 
-    Тело heredoc приклеивается к args, а не разбирается как отдельные
-    инструкции: иначе 'apt-get' из тела станет директивой APT-GET, а USER
-    внутри heredoc — несуществующим переключением пользователя.
+    Тело heredoc добавляется к args инструкции.
     """
     instructions: list[dict] = []
     lines = path.read_text(encoding="utf-8").splitlines()
