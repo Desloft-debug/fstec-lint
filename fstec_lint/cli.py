@@ -8,7 +8,7 @@ from . import __version__
 from . import baseline as baseline_module
 from .engine import filter_by_uz, filter_rules, load_rules, scan, unknown_patterns
 from .models import Rule, Severity
-from .reporters import html, json_reporter, passport, rules_catalog, sarif, text
+from .reporters import docx, html, json_reporter, passport, rules_catalog, sarif, text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,7 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fstec-lint",
         description=(
             "Статический аудит инфраструктуры (Docker Compose, Dockerfile, "
-            "PostgreSQL, sshd_config, systemd) с привязкой находок к мерам "
+            "PostgreSQL, sshd_config, systemd, login.defs, pwquality, rsyslog, "
+            "nginx) с привязкой находок к мерам "
             "защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)."
         ),
     )
@@ -29,9 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f",
         "--format",
-        choices=["text", "json", "html", "sarif", "passport"],
+        choices=["text", "json", "html", "sarif", "passport", "docx"],
         default="text",
-        help=("формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015 (приложение А)"),
+        help=(
+            "формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015, "
+            "docx — отчёт по ГОСТ 7.32-2017 с паспортами в приложении (нужен --output)"
+        ),
     )
     parser.add_argument("-o", "--output", help="файл для сохранения отчёта (по умолчанию — stdout)")
     parser.add_argument(
@@ -107,12 +111,7 @@ def _rule_patterns(values: list[str]) -> list[str]:
 
 
 def _report_unknown(rules: list[Rule], patterns: list[str], option: str) -> bool:
-    """Печатает нераспознанные шаблоны правил. True, если такие были.
-
-    Опечатка в --select раньше давала «нарушений не найдено» и код 0:
-    прогон, не проверивший ничего, выглядел как успешный аудит. Теперь
-    это код 2 — ошибка вызова.
-    """
+    """Печатает шаблоны правил, не подошедшие ни к одному правилу. True, если такие были."""
     unknown = unknown_patterns(rules, patterns)
     for pattern in unknown:
         print(
@@ -127,12 +126,7 @@ class UsageError(Exception):
 
 
 def _write(output: str, destination: str | None) -> None:
-    """Пишет отчёт в файл или в stdout.
-
-    Ошибка записи — это ошибка вызова (код 2), а не находка: раньше
-    несуществующий каталог в --output давал трейсбек и код 1, то есть
-    ровно тот же код, что «найдены нарушения выше порога».
-    """
+    """Пишет отчёт в файл или в stdout. Ошибка записи — код 2."""
     if not destination:
         print(output)
         return
@@ -166,6 +160,9 @@ def _run(argv: list[str] | None) -> int:
                 )
             _write(rules_catalog.render_text(rules), args.output)
         return 0
+
+    if args.format == "docx" and not args.output:
+        raise UsageError("для --format docx укажите файл через --output")
 
     root = Path(args.path).resolve()
     if not root.exists():
@@ -208,7 +205,14 @@ def _run(argv: list[str] | None) -> int:
         if suppressed:
             print(f"fstec-lint: подавлено baseline-ом: {suppressed}", file=sys.stderr)
 
-    if args.format == "json":
+    if args.format == "docx":
+        applied = filter_by_uz(filter_rules(all_rules, select, ignore), args.uz)
+        try:
+            Path(args.output).write_bytes(docx.render(findings, root.name, len(applied)))
+        except OSError as exc:
+            raise UsageError(f"не удалось записать {args.output}: {exc.strerror or exc}") from exc
+        output = None
+    elif args.format == "json":
         output = json_reporter.render(findings)
     elif args.format == "html":
         output = html.render(findings, title=f"fstec-lint report — {root.name}")
@@ -219,7 +223,8 @@ def _run(argv: list[str] | None) -> int:
     else:
         output = text.render(findings)
 
-    _write(output, args.output)
+    if output is not None:
+        _write(output, args.output)
 
     if result.errors:
         print(
@@ -227,11 +232,7 @@ def _run(argv: list[str] | None) -> int:
             file=sys.stderr,
         )
 
-    # Порог считается ПЕРЕД кодом 3. Код 3 отдельно от 1 нужен, чтобы
-    # «инструмент не прочитал часть файлов» не путали с «нарушения
-    # найдены», но приоритет у нарушения: прогон с одним битым файлом и
-    # critical-находкой возвращал 3, и гейт, различающий эти коды, читал
-    # его как чистый.
+    # Код 1 важнее кода 3: нарушение не должно теряться из-за нечитаемого файла.
     if args.fail_on != "none":
         threshold = Severity.from_str(args.fail_on)
         if any(finding.rule.severity >= threshold for finding in findings):

@@ -45,15 +45,12 @@ def render(findings: list[Finding]) -> str:
                     {
                         "physicalLocation": {
                             "artifactLocation": {"uri": finding.relative_file()},
-                            # Строка известна не для всех форматов: у сервиса в
-                            # compose она есть, у «во всём файле нет HEALTHCHECK» —
-                            # условная. SARIF требует положительный номер строки.
+                            # SARIF требует положительный номер строки.
                             "region": {"startLine": finding.line or 1},
                         }
                     }
                 ],
-                # Отпечаток не зависит от номера строки, поэтому GitHub Code
-                # Scanning не заводит новый алерт после сдвига файла.
+                # Отпечаток без номера строки: алерт не дублируется при сдвиге.
                 "partialFingerprints": {"fstecLintFingerprint/v1": _fingerprint(finding)},
             }
         )
