@@ -8,6 +8,7 @@ import json
 import re
 from collections import Counter
 
+from .. import maturity
 from ..models import Rule, Severity
 
 TARGET_LABELS = {
@@ -56,6 +57,11 @@ def _coverage(rules: list[Rule]) -> Counter:
     return counter
 
 
+def _direction_number(rule: Rule) -> int | None:
+    found = maturity.direction_for_activity(rule.activity)
+    return found.number if found is not None else None
+
+
 def render_text(rules: list[Rule]) -> str:
     lines = [f"Правил всего: {len(rules)}", ""]
 
@@ -74,6 +80,11 @@ def render_text(rules: list[Rule]) -> str:
     coverage = _coverage(rules)
     summary = ", ".join(f"{group} ({count})" for group, count in sorted(coverage.items()))
     lines.append(f"Затронутые пункты приказа ФСТЭК N 117: {summary}")
+
+    directions = maturity.rules_by_direction(rules)
+    if directions:
+        listed = ", ".join(f"{number} ({len(ids)})" for number, ids in directions.items())
+        lines.append(f"Направления методики оценки уровня зрелости (07.08.2026): {listed}")
     return "\n".join(lines)
 
 
@@ -81,6 +92,9 @@ def render_json(rules: list[Rule]) -> str:
     payload = {
         "total": len(rules),
         "measure_groups": dict(sorted(_coverage(rules).items())),
+        "maturity_directions": {
+            str(number): list(ids) for number, ids in maturity.rules_by_direction(rules).items()
+        },
         "rules": [
             {
                 "id": rule.id,
@@ -94,6 +108,7 @@ def render_json(rules: list[Rule]) -> str:
                 "submeasure_title": rule.submeasure_title,
                 "activity": rule.activity,
                 "activity_title": rule.activity_title,
+                "maturity_direction": _direction_number(rule),
                 "pdn_measure": rule.pdn_measure,
                 "pdn_measure_title": rule.pdn_measure_title,
                 "orders": rule.orders,

@@ -33,6 +33,7 @@ def test_render_text_lists_every_rule():
     for rule in rules:
         assert rule.id in output
     assert "Затронутые пункты приказа ФСТЭК N 117:" in output
+    assert "Направления методики оценки уровня зрелости (07.08.2026): 3 (11)" in output
 
 
 def test_render_json_shape():
@@ -42,7 +43,11 @@ def test_render_json_shape():
     assert len(payload["rules"]) == len(rules)
     assert payload["measure_groups"]
     first = payload["rules"][0]
-    assert {"id", "severity", "target", "measure_groups", "orders"} <= set(first)
+    assert {"id", "severity", "target", "measure_groups", "orders", "maturity_direction"} <= set(
+        first
+    )
+    directions = payload["maturity_directions"]
+    assert sum(len(ids) for ids in directions.values()) == len(rules)
 
 
 def test_cli_list_rules_text(capsys):
