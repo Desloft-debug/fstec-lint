@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fstec-lint"
-version = "1.0.0"
+version = "1.0.1"
 description = "Статический аудит Docker/Dockerfile/PostgreSQL/sshd/systemd инфраструктуры с привязкой находок к мерам защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -64,6 +64,7 @@ select = ["E", "F", "W", "UP", "I", "B"]
 # Встроенные HTML/CSS-шаблоны длиннее лимита в 100 символов — разбивать их
 # построчно только ради ruff не имеет смысла.
 "fstec_lint/reporters/html.py" = ["E501"]
+"fstec_lint/reporters/docx.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"

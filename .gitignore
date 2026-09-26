@@ -12,3 +12,6 @@ fstec-lint-report.*
 .coverage
 .coverage.*
 htmlcov/
+
+# Наборы для benchmarks/run.sh
+benchmarks/.corpora/
