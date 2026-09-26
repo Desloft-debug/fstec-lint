@@ -1,5 +1,6 @@
 import json
 
+from fstec_lint import maturity
 from fstec_lint.cli import main
 from fstec_lint.engine import load_rules
 from fstec_lint.models import Rule, Severity
@@ -33,7 +34,8 @@ def test_render_text_lists_every_rule():
     for rule in rules:
         assert rule.id in output
     assert "Затронутые пункты приказа ФСТЭК N 117:" in output
-    assert "Направления методики оценки уровня зрелости (07.08.2026): 3 (11)" in output
+    kk = len(maturity.rules_by_direction(rules)[3])
+    assert f"Направления методики оценки уровня зрелости (07.08.2026): 3 ({kk})" in output
 
 
 def test_render_json_shape():

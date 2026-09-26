@@ -1,3 +1,5 @@
+import pytest
+
 from fstec_lint.checks import compose_checks as cc
 
 
@@ -125,13 +127,32 @@ def test_missing_resource_limits_flagged():
 
 
 def test_resource_limits_via_legacy_keys_ok():
-    compose = {"services": {"web": {"mem_limit": "512m"}}}
+    compose = {"services": {"web": {"mem_limit": "512m", "cpus": 0.5}}}
     assert cc.check_missing_resource_limits(compose) == []
 
 
 def test_resource_limits_via_deploy_ok():
-    compose = {"services": {"web": {"deploy": {"resources": {"limits": {"memory": "512M"}}}}}}
+    limits = {"memory": "512M", "cpus": "0.5"}
+    compose = {"services": {"web": {"deploy": {"resources": {"limits": limits}}}}}
     assert cc.check_missing_resource_limits(compose) == []
+
+
+@pytest.mark.parametrize(
+    "svc",
+    [
+        {"mem_limit": "512m"},
+        {"cpus": 0.25},
+        {"deploy": {"resources": {"limits": {"cpus": "0.3"}}}},
+        {"deploy": {"resources": {"limits": {"memory": "512M"}}}},
+    ],
+)
+def test_resource_limits_need_both_memory_and_cpu(svc):
+    assert len(cc.check_missing_resource_limits({"services": {"web": svc}})) == 1
+
+
+def test_missing_cap_drop_all_is_reported():
+    assert len(cc.check_dangerous_capabilities({"services": {"web": {}}})) == 1
+    assert cc.check_dangerous_capabilities({"services": {"web": {"cap_drop": ["all"]}}}) == []
 
 
 def test_missing_healthcheck_flagged():

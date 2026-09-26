@@ -1,8 +1,4 @@
-"""Проверки postgresql.conf и pg_hba.conf.
-
-Первые две функции работают со списком записей из parse_pg_hba,
-остальные — со словарём параметров из parse_postgresql_conf.
-"""
+"""Проверки postgresql.conf и pg_hba.conf."""
 
 from __future__ import annotations
 
@@ -140,8 +136,7 @@ def check_missing_statement_timeout(settings: dict) -> CheckResults:
     return []
 
 
-# Два реестра, а не один: pg_hba и postgresql.conf парсятся в разную
-# форму (список записей vs словарь), так надёжнее.
+# pg_hba разбирается в список записей, postgresql.conf — в словарь.
 PG_HBA_REGISTRY = {
     "P001": check_trust_or_md5_auth,
     "P002": check_open_hba_address,

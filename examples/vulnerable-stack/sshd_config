@@ -4,3 +4,4 @@ PasswordAuthentication yes
 PermitEmptyPasswords no
 X11Forwarding yes
 MaxAuthTries 10
+LogLevel QUIET

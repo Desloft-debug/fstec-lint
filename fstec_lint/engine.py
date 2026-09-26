@@ -10,11 +10,28 @@ from typing import Any
 
 import yaml
 
-from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
+from .checks import (
+    compose_checks,
+    dockerfile_checks,
+    linux_checks,
+    nginx_checks,
+    postfix_checks,
+    postgres_checks,
+    sshd_checks,
+    systemd_checks,
+)
 from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
 from .parsers.compose import parse_compose
 from .parsers.dockerfile import parse_dockerfile
+from .parsers.linux import (
+    parse_login_defs,
+    parse_pwquality,
+    parse_rsyslog,
+    parse_useradd_defaults,
+)
+from .parsers.nginx import parse_nginx
+from .parsers.postfix import parse_postfix_main
 from .parsers.postgres import parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
 from .parsers.systemd import parse_systemd_unit
@@ -33,10 +50,17 @@ PG_HBA_PATTERNS = ("pg_hba.conf",)
 SSHD_CONFIG_PATTERNS = ("sshd_config",)
 SYSTEMD_UNIT_PATTERNS = ("*.service",)
 DOCKERFILE_PATTERNS = ("Dockerfile", "Dockerfile.*", "*.dockerfile")
+LOGIN_DEFS_PATTERNS = ("login.defs",)
+PWQUALITY_PATTERNS = ("pwquality.conf",)
+RSYSLOG_PATTERNS = ("rsyslog.conf",)
+NGINX_PATTERNS = ("nginx.conf",)
+# Имена общие, поэтому нужен признак в пути: default/useradd, postfix/main.cf.
+USERADD_DEFAULTS = ("default", "useradd")
+POSTFIX_MAIN = "main.cf"
+# Файлы сайтов nginx, которые проверяются отдельно, если рядом нет nginx.conf.
+NGINX_SITE_DIRS = frozenset({"conf.d", "sites-available", "sites-enabled", "http.d"})
 
-# Каталоги со сторонним и служебным содержимым: конфиги внутри них не
-# наши и правятся не нами, а на большом репозитории они дают основную
-# массу шума и времени обхода.
+# Сторонние и служебные каталоги, которые не сканируются.
 DEFAULT_EXCLUDED_DIRS = frozenset(
     {
         ".git",
@@ -58,9 +82,7 @@ DEFAULT_EXCLUDED_DIRS = frozenset(
 
 CheckFn = Callable[[Any], CheckResults]
 
-# Подавление находки прямо в проверяемом файле: комментарий действует на
-# свою строку и на следующую, чтобы его можно было писать и в хвосте
-# строки, и над ней (в YAML хвост не всегда читаем).
+# Подавление в самом файле; действует на свою и следующую строку:
 #   ports: ["5432:5432"]  # fstec-lint: ignore C005
 #   # fstec-lint: ignore
 SUPPRESSION_RE = re.compile(r"fstec-lint:\s*ignore(?P<rules>[A-Za-z0-9,*\s]*)", re.IGNORECASE)
@@ -131,11 +153,7 @@ def filter_rules(
 
 
 def filter_by_uz(rules: list[Rule], level: int | None) -> list[Rule]:
-    """Правила, чья мера входит в базовый набор для уровня УЗ.
-
-    Наборы заданы приложением к приказу N 21. Мера вне набора применяется
-    при адаптации (пункты 9 и 10), так что фильтр только сужает проверку.
-    """
+    """Правила, чья мера входит в базовый набор приказа N 21 для уровня УЗ."""
     if level is None:
         return rules
     return [rule for rule in rules if in_base_set(rule.pdn_measure, level)]
@@ -147,11 +165,7 @@ def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
 
 
 def inline_suppressions(path: Path) -> dict[int, set[str]]:
-    """{строка: набор правил} из комментариев в самом файле.
-
-    Пустой набор означает «подавить любое правило на этой строке».
-    Комментарий действует на свою строку и на следующую.
-    """
+    """{строка: правила} из комментариев в файле. Пустой набор — все правила."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -166,14 +180,12 @@ def inline_suppressions(path: Path) -> dict[int, set[str]]:
         rules = {token.upper() for token in raw}
         for target in (lineno, lineno + 1):
             if not rules:
-                # Сплошное подавление поглощает любой перечень правил...
+                # Подавление без списка правил перекрывает любой список.
                 suppressions[target] = set()
                 continue
             already = suppressions.get(target)
             if already is not None and not already:
-                # ...и обратно им не сужается: комментарий '# fstec-lint:
-                # ignore' на строке выше глушит строку целиком, даже если
-                # на ней самой перечислены отдельные правила.
+                # Строка уже подавлена целиком.
                 continue
             suppressions.setdefault(target, set()).update(rules)
     return suppressions
@@ -201,8 +213,7 @@ def _candidate_files(
     if root.is_file():
         return [root]
 
-    # Без onerror os.walk проглатывает ошибки листинга, и каталог без
-    # прав давал ноль находок, ноль ошибок и код 0.
+    # Без onerror os.walk молча пропускает нечитаемые каталоги.
     def _report(error: OSError) -> None:
         if on_error is not None:
             on_error(error)
@@ -238,7 +249,14 @@ def discover_files(
         "sshd_config": [],
         "systemd_unit": [],
         "dockerfile": [],
+        "login_defs": [],
+        "pwquality": [],
+        "rsyslog": [],
+        "nginx": [],
+        "useradd_defaults": [],
+        "postfix_main": [],
     }
+    nginx_sites: list[Path] = []
 
     for path in _candidate_files(root, exclude, on_error):
         name = path.name
@@ -254,7 +272,38 @@ def discover_files(
             found["systemd_unit"].append(path)
         elif _matches_any(name, DOCKERFILE_PATTERNS):
             found["dockerfile"].append(path)
+        elif _matches_any(name, LOGIN_DEFS_PATTERNS):
+            found["login_defs"].append(path)
+        elif _matches_any(name, PWQUALITY_PATTERNS):
+            found["pwquality"].append(path)
+        elif _matches_any(name, RSYSLOG_PATTERNS):
+            found["rsyslog"].append(path)
+        elif _matches_any(name, NGINX_PATTERNS):
+            found["nginx"].append(path)
+        elif name.endswith(".conf") and _is_nginx_site(path, root):
+            nginx_sites.append(path)
+        elif (path.parent.name, name) == USERADD_DEFAULTS:
+            found["useradd_defaults"].append(path)
+        elif name == POSTFIX_MAIN and _has_part(path, root, "postfix"):
+            found["postfix_main"].append(path)
+    # Файл сайта уже читается через include основного nginx.conf.
+    roots = {p.parent for p in found["nginx"]}
+    found["nginx"].extend(p for p in nginx_sites if p.parent.parent not in roots)
     return found
+
+
+def _has_part(path: Path, root: Path, word: str) -> bool:
+    """Есть ли word в одном из трёх ближайших каталогов внутри root."""
+    try:
+        parts = path.parent.relative_to(root).parts
+    except ValueError:
+        parts = path.parent.parts
+    return any(word in part.lower() for part in parts[-3:])
+
+
+def _is_nginx_site(path: Path, root: Path) -> bool:
+    """Файл в conf.d и подобных каталогах, если выше по пути есть «nginx»."""
+    return path.parent.name in NGINX_SITE_DIRS and _has_part(path.parent, root, "nginx")
 
 
 def _describe(exc: Exception) -> str:
@@ -265,12 +314,14 @@ def _finding(rule: Rule, path: Path, item: CheckResult) -> Finding:
     """Собирает Finding из 3- или 4-элементного результата проверки."""
     location, detail, line = item[0], item[1], item[2]
     suppress_lines = item[3] if len(item) > 3 else ()
+    # Строка из файла, подключённого через Include, несёт имя этого файла.
+    source = getattr(line, "file", None)
     return Finding(
         rule=rule,
-        file=str(path),
+        file=source or str(path),
         location=location,
         detail=detail,
-        line=line,
+        line=int(line) if line is not None else None,
         suppress_lines=tuple(suppress_lines or ()),
     )
 
@@ -283,9 +334,7 @@ def _run_registry(
     parse: Callable[[Path], Any],
 ) -> None:
     for path in paths:
-        # Один битый или бинарный файл не должен ронять весь прогон:
-        # имя файла с расширением .service ещё не гарантирует, что внутри
-        # текстовый юнит systemd.
+        # Битый файл попадает в ошибки, остальные проверяются дальше.
         try:
             data = parse(path)
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
@@ -294,8 +343,7 @@ def _run_registry(
             )
             continue
 
-        # По одной, а не всем блоком: падение любой проверки уничтожало
-        # найденное другими правилами и выглядело как ошибка разбора.
+        # Сбой одной проверки не отменяет результаты остальных.
         file_findings: list[Finding] = []
         for rule in rules:
             check_fn = registry.get(rule.id)
@@ -311,8 +359,14 @@ def _run_registry(
                     )
                 )
 
-        suppressions = inline_suppressions(path)
-        kept = [f for f in file_findings if not _is_suppressed(f, suppressions)]
+        # Подавления читаются из того файла, куда указывает находка.
+        suppressions: dict[str, dict[int, set[str]]] = {}
+        kept = []
+        for finding in file_findings:
+            if finding.file not in suppressions:
+                suppressions[finding.file] = inline_suppressions(Path(finding.file))
+            if not _is_suppressed(finding, suppressions[finding.file]):
+                kept.append(finding)
         result.suppressed += len(file_findings) - len(kept)
         result.findings.extend(kept)
 
@@ -347,12 +401,16 @@ def scan(
         ("sshd_config", sshd_checks.REGISTRY, parse_sshd_config),
         ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
+        ("login_defs", linux_checks.LOGIN_DEFS_REGISTRY, parse_login_defs),
+        ("pwquality", linux_checks.PWQUALITY_REGISTRY, parse_pwquality),
+        ("rsyslog", linux_checks.RSYSLOG_REGISTRY, parse_rsyslog),
+        ("nginx", nginx_checks.REGISTRY, parse_nginx),
+        ("useradd_defaults", linux_checks.USERADD_REGISTRY, parse_useradd_defaults),
+        ("postfix_main", postfix_checks.REGISTRY, parse_postfix_main),
     ]
     for target, registry, parse in registries:
         target_rules = rules_by_target.get(target, [])
-        # Ни одного активного правила для этого типа файлов — разбирать
-        # их незачем. Иначе --select/--ignore не спасали от битого файла
-        # отключённого типа: он всё равно давал ошибку разбора и код 3.
+        # Нет активных правил для этого типа — файлы не разбираем.
         if not target_rules:
             continue
         _run_registry(result, files[target], target_rules, registry, parse)

@@ -9,6 +9,9 @@ from fstec_lint import auth, measures, terms
 from fstec_lint.checks import (
     compose_checks,
     dockerfile_checks,
+    linux_checks,
+    nginx_checks,
+    postfix_checks,
     postgres_checks,
     sshd_checks,
     systemd_checks,
@@ -22,6 +25,12 @@ REGISTRY_BY_TARGET = {
     "postgresql_conf": postgres_checks.POSTGRESQL_CONF_REGISTRY,
     "sshd_config": sshd_checks.REGISTRY,
     "systemd_unit": systemd_checks.REGISTRY,
+    "login_defs": linux_checks.LOGIN_DEFS_REGISTRY,
+    "pwquality": linux_checks.PWQUALITY_REGISTRY,
+    "rsyslog": linux_checks.RSYSLOG_REGISTRY,
+    "nginx": nginx_checks.REGISTRY,
+    "useradd_defaults": linux_checks.USERADD_REGISTRY,
+    "postfix_main": postfix_checks.REGISTRY,
 }
 
 
@@ -149,10 +158,7 @@ def test_container_rules_use_the_container_submeasures():
 def test_logging_and_channel_rules_are_not_swapped():
     """P005 — защита канала, P007 — регистрация событий, не наоборот.
 
-    Правила легко перепутать по заголовкам: у обоих в названии слово из
-    соседней области. Судить нужно по предмету: P005 смотрит 'ssl', то
-    есть передачу данных по каналу связи, а P007 — 'log_statement', то
-    есть регистрацию событий.
+    P005 проверяет 'ssl', P007 — 'log_statement'.
     """
     subs = {rule.id: rule.submeasure for rule in load_rules()}
 

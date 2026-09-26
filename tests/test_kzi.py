@@ -1,12 +1,11 @@
 """Структура Кзи, выписанная из Методики оценки ФСТЭК.
 
-Таблица переносится руками, а ошибка в весе исказит любую отчётность,
-которая на неё сошлётся. Ловится арифметикой самой Методики: при всех
-реализованных мерах формула обязана дать ровно 1.
+Проверка весов: при всех реализованных мерах формула даёт ровно 1.
 """
 
 from fstec_lint import kzi
 from fstec_lint.engine import load_rules
+from fstec_lint.models import Severity
 
 
 def test_group_weights_sum_to_one():
@@ -43,3 +42,23 @@ def test_supported_indicators_reference_real_rules():
     for code, rule_ids in kzi.SUPPORTED_INDICATORS.items():
         missing = [rule_id for rule_id in rule_ids if rule_id not in known]
         assert missing == [], f"{code} ссылается на несуществующие правила: {missing}"
+
+
+def test_k33_lists_every_critical_rule():
+    """k33 — критические уязвимости серверов: все правила уровня critical."""
+    critical = {rule.id for rule in load_rules() if rule.severity == Severity.CRITICAL}
+
+    assert set(kzi.SUPPORTED_INDICATORS["k33"]) == critical
+
+
+def test_supported_share_of_kzi():
+    """Верхняя граница вклада показателей с материалом — цифра из docs/kzi.md."""
+    weights = {group.number: group.weight for group in kzi.GROUPS}
+    share = 0.0
+    for code in kzi.SUPPORTED_INDICATORS:
+        item = kzi.indicator(code)
+        assert item is not None
+        share += item.value * weights[item.group]
+
+    assert len(kzi.SUPPORTED_INDICATORS) == 10
+    assert round(share, 4) == 0.7375

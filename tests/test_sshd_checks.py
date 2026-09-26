@@ -7,7 +7,8 @@ def test_permit_root_login_yes_flagged():
 
 
 def test_permit_root_login_without_password_flagged():
-    assert len(sc.check_permit_root_login({"permitrootlogin": "without-password"})) == 1
+    # синоним prohibit-password, вход только по ключу
+    assert sc.check_permit_root_login({"permitrootlogin": "without-password"}) == []
 
 
 def test_permit_root_login_no_ok():

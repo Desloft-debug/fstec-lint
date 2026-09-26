@@ -17,10 +17,9 @@ MAX_LOCATION_ARGS = 60
 
 @dataclass
 class Stage:
-    """Одна стадия сборки: FROM и всё, что до следующего FROM.
+    """Стадия сборки: FROM и всё до следующего FROM.
 
-    Инструкции до первого FROM (ARG там легален) складываются в
-    псевдостадию с is_from=False, чтобы не выпадать из проверок.
+    Инструкции до первого FROM попадают в псевдостадию с is_from=False.
     """
 
     index: int
@@ -38,11 +37,7 @@ class Stage:
 
 
 def _from_ref(args: str) -> tuple[str, str | None]:
-    """'--platform=$X golang:1.23 AS builder' -> ('golang:1.23', 'builder').
-
-    Флаги вида --platform обязательно отбрасываются: иначе за имя образа
-    принимается сам флаг и проверка закрепления версии врёт.
-    """
+    """'--platform=$X golang:1.23 AS builder' -> ('golang:1.23', 'builder')."""
     tokens = [token for token in args.split() if not token.startswith("--")]
     if not tokens:
         return "", None
@@ -98,29 +93,17 @@ def _stage_by_name(stages: list[Stage], name: str) -> Stage | None:
 
 
 def _loc(stage: Stage, suffix: str) -> str:
-    """Адрес находки без номера строки: он живёт в отдельном поле Finding.
-
-    Номер строки в location делал отпечаток для baseline нестабильным —
-    вставка строки в начало файла обнуляла весь принятый долг.
-    """
+    """Адрес находки без номера строки (строка хранится отдельно в Finding)."""
     return f"{stage.label}: {suffix}"
 
 
 def _normalize(args: str) -> str:
-    """Аргументы в одну строку: тело heredoc содержит переводы строк.
-
-    Без этого многострочный RUN уезжал в поле detail как есть и рвал
-    построчный текстовый отчёт (и строку в JSON) на несколько.
-    """
+    """Аргументы в одну строку (тело heredoc многострочное)."""
     return " ".join(args.split())
 
 
 def _short(args: str) -> str:
-    """Короткий адрес находки; при усечении дополняется хешом.
-
-    Усечённый адрес входит в отпечаток baseline, и две длинные команды с
-    общим началом получали один и тот же — одна запись глушила обе.
-    """
+    """Короткий адрес находки; при усечении добавляется хеш, чтобы адреса не совпадали."""
     args = _normalize(args)
     if len(args) <= MAX_LOCATION_ARGS:
         return args
@@ -129,11 +112,7 @@ def _short(args: str) -> str:
 
 
 def _effective_user(stage: Stage, stages: list[Stage], seen: set[int] | None = None) -> str | None:
-    """Пользователь, от которого стартует стадия, с учётом наследования.
-
-    Если в стадии нет USER, но она собрана FROM другой локальной стадии —
-    пользователь наследуется оттуда, и правило не должно ругаться.
-    """
+    """Пользователь стадии с учётом наследования от локальной стадии в FROM."""
     seen = seen or set()
     if stage.index in seen:
         return None
@@ -220,18 +199,22 @@ def check_latest_base_image(instructions: list[dict]) -> CheckResults:
     build_stages = _build_stages(_stages(instructions))
     for position, stage in enumerate(build_stages):
         image = stage.parent
-        # FROM builder — ссылка на предыдущую стадию, а не на внешний образ:
-        # закреплять там нечего, это не находка.
+        # FROM builder — предыдущая стадия, закреплять нечего.
         if _stage_by_name(build_stages[:position], image) is not None:
             continue
         if not image or "@sha256:" in image or image == "scratch":
             continue
         last_segment = image.split("/")[-1]
         if ":" not in last_segment or last_segment.endswith(":latest"):
+            reason = (
+                "образ задан переменной без значения в ARG до первого FROM и не закреплён"
+                if "$" in image
+                else "базовый образ не закреплён по версии/digest"
+            )
             findings.append(
                 (
                     _loc(stage, f"FROM {image}"),
-                    f"FROM {image} — базовый образ не закреплён по версии/digest",
+                    f"FROM {image} — {reason}",
                     stage.from_line,
                 )
             )

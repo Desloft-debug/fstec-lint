@@ -1,9 +1,7 @@
 """Проверки docker-compose.yml.
 
-Функции принимают распарсенный compose и возвращают
-(location, detail, line) для каждого нарушения; line — строка объявления
-сервиса или None, если она неизвестна. Severity/мера/remediation —
-в rules/compose_rules.yaml, привязка по id через REGISTRY внизу файла.
+Каждая функция возвращает (location, detail, line) на нарушение.
+Метаданные правил — в rules/compose_rules.yaml, связь по id в REGISTRY.
 """
 
 from __future__ import annotations
@@ -21,15 +19,35 @@ SECRET_KEY_RE = re.compile(
 DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "ALL", "SYS_PTRACE", "SYS_MODULE"}
 SAFE_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 DOCKER_API_PORTS = {"2375", "2376"}
-SENSITIVE_HOST_MOUNTS = {"/", "/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
+# Системные каталоги хоста. Перечень совпадает с isOSDir из KICS: лишнее
+# срабатывание на данных в /var или /srv дешевле пропущенного /etc.
+SENSITIVE_HOST_MOUNTS = {
+    "/",
+    "/bin",
+    "/boot",
+    "/cdrom",
+    "/dev",
+    "/etc",
+    "/home",
+    "/lib",
+    "/lib64",
+    "/media",
+    "/proc",
+    "/root",
+    "/run",
+    "/sbin",
+    "/selinux",
+    "/srv",
+    "/sys",
+    "/usr",
+    "/var",
+}
 DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
 DEBUG_TRUTHY = {"1", "true", "yes", "on"}
-# ${DB_PASSWORD:-changeme} — подстановка со значением по умолчанию:
-# сама ссылка безопасна, а вот дефолт в ней лежит в репозитории.
+# ${DB_PASSWORD:-changeme}: значение по умолчанию лежит в репозитории.
 ENV_DEFAULT_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]([^}]*)\}$")
-# Подстановка compose целиком: $VAR, ${VAR}, ${VAR:?err} и т. п. Литерал,
-# который просто начинается с '$' ('$ecretPa55'), подстановкой не является
-# и обязан проверяться как секрет в открытом виде.
+# Значение целиком — подстановка: $VAR, ${VAR}, ${VAR:?err}.
+# '$ecretPa55' подстановкой не считается.
 ENV_SUBSTITUTION_RE = re.compile(r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)$")
 
 
@@ -38,12 +56,7 @@ def _services(compose: dict) -> dict:
 
 
 def _line(compose: dict, service: str, *keys: str) -> int | None:
-    """Строка нарушающей директивы сервиса, если compose разобран parse_compose.
-
-    Находка привязывается к самому раннему из переданных ключей, а не к
-    объявлению сервиса: иначе '# fstec-lint: ignore C005' над строкой
-    'ports' не срабатывал, потому что находка числилась на 'db:'.
-    """
+    """Строка нарушающей директивы (самый ранний из ключей) или сервиса."""
     key_line = getattr(compose, "key_line", None)
     if callable(key_line):
         return key_line(service, *keys)
@@ -96,12 +109,20 @@ def check_dangerous_capabilities(compose: dict) -> CheckResults:
             continue
         caps = as_list(svc.get("cap_add"))
         bad = [str(c) for c in caps if str(c).upper() in DANGEROUS_CAPS]
+        dropped = {str(c).upper() for c in as_list(svc.get("cap_drop"))}
+        problems = []
         if bad:
+            problems.append(f"добавлены опасные capabilities: {', '.join(bad)}")
+        if "ALL" not in dropped:
+            problems.append(
+                "не задан cap_drop: [ALL] — контейнер получает capabilities Docker по умолчанию"
+            )
+        if problems:
             findings.append(
                 (
                     f"service:{name}",
-                    f"добавлены опасные capabilities: {', '.join(bad)}",
-                    _line(compose, name, "cap_add"),
+                    "; ".join(problems),
+                    _line(compose, name, "cap_add", "cap_drop"),
                 )
             )
     return findings
@@ -127,7 +148,7 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
             continue
         for key, value in _env_items(svc.get("environment")):
             if key.upper().endswith(("_FILE", "_FILENAME")):
-                # docker secrets convention: значение — это путь, а не сам секрет
+                # *_FILE по соглашению docker secrets содержит путь к файлу с секретом
                 continue
             if not value or not SECRET_KEY_RE.search(key):
                 continue
@@ -137,8 +158,7 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
                     continue
                 detail = f"переменная {key} подставляет секрет по умолчанию: {value}"
             elif ENV_SUBSTITUTION_RE.match(value):
-                # Настоящая подстановка ($VAR, ${VAR}) — значение приходит
-                # извне и в файле его нет.
+                # $VAR, ${VAR}: значение приходит извне.
                 continue
             else:
                 # '$$ecret' — экранированный литерал, а не подстановка.
@@ -148,10 +168,9 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
 
 
 def _port_is_exposed(entry: object) -> tuple[bool, list[str]]:
-    """Возвращает (публикуется_на_всех_интерфейсах, список container-портов).
+    """(публикуется ли на всех интерфейсах, порты контейнера).
 
-    Портов может быть несколько: '5432-5433:5432-5433' — валидная запись
-    диапазона, и каждый порт из него публикуется по-настоящему.
+    Диапазоны вида '5432-5433:5432-5433' раскрываются.
     """
     if isinstance(entry, dict):
         target = str(entry.get("target", ""))
@@ -296,13 +315,22 @@ def check_no_read_only(compose: dict) -> CheckResults:
     return findings
 
 
+def _no_new_privileges_enabled(option: object) -> bool:
+    """'no-new-privileges', ':true' или '=true'; ':false' опцию выключает."""
+    text = str(option).strip().lower().replace("=", ":")
+    if not text.startswith("no-new-privileges"):
+        return False
+    value = text[len("no-new-privileges") :].lstrip(":").strip()
+    return value in ("", "true", "1")
+
+
 def check_missing_no_new_privileges(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
         sec_opt = as_list(svc.get("security_opt"))
-        if not any("no-new-privileges" in str(opt) for opt in sec_opt):
+        if not any(_no_new_privileges_enabled(opt) for opt in sec_opt):
             findings.append(
                 (
                     f"service:{name}",
@@ -335,21 +363,36 @@ def check_missing_resource_limits(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
-        has_legacy_limits = "mem_limit" in svc or "cpus" in svc
         deploy = svc.get("deploy")
-        has_deploy_limits = bool(
-            isinstance(deploy, dict) and (deploy.get("resources") or {}).get("limits")
-        )
-        if not has_legacy_limits and not has_deploy_limits:
+        resources = deploy.get("resources") if isinstance(deploy, dict) else None
+        limits = resources.get("limits") if isinstance(resources, dict) else None
+        limits = limits if isinstance(limits, dict) else {}
+        missing = []
+        if "mem_limit" not in svc and "memory" not in limits:
+            missing.append("памяти (mem_limit или deploy.resources.limits.memory)")
+        if not {"cpus", "cpu_quota"} & set(svc) and "cpus" not in limits:
+            missing.append("CPU (cpus или deploy.resources.limits.cpus)")
+        if missing:
             findings.append(
                 (
                     f"service:{name}",
-                    "не заданы ограничения ресурсов (mem_limit/cpus или "
-                    "deploy.resources.limits) — один контейнер может исчерпать ресурсы хоста",
+                    f"не задано ограничение {' и '.join(missing)} — "
+                    "один контейнер может исчерпать ресурсы хоста",
                     _line(compose, name, "deploy", "mem_limit", "cpus"),
                 )
             )
     return findings
+
+
+def _healthcheck_disabled(healthcheck: object) -> bool:
+    """disable: true или test: ["NONE"] отключают проверку, заданную в образе."""
+    if not isinstance(healthcheck, dict):
+        return False
+    if healthcheck.get("disable"):
+        return True
+    test = healthcheck.get("test")
+    first = test[0] if isinstance(test, list) and test else test
+    return str(first).strip().upper() == "NONE"
 
 
 def check_missing_healthcheck(compose: dict) -> CheckResults:
@@ -358,7 +401,7 @@ def check_missing_healthcheck(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         healthcheck = svc.get("healthcheck")
-        if not healthcheck or (isinstance(healthcheck, dict) and healthcheck.get("disable")):
+        if not healthcheck or _healthcheck_disabled(healthcheck):
             findings.append(
                 (
                     f"service:{name}",
@@ -387,6 +430,36 @@ def check_debug_mode_enabled(compose: dict) -> CheckResults:
     return findings
 
 
+def _is_sensitive_host_path(path: str) -> bool:
+    """Путь из SENSITIVE_HOST_MOUNTS или вложенный в него (/etc/ssl, /proc/1)."""
+    if not path.startswith("/") or path.endswith("docker.sock"):
+        return False  # docker.sock проверяет C008
+    normalized = path.rstrip("/") or "/"
+    if normalized == "/":
+        return True
+    return any(
+        normalized == base or normalized.startswith(base + "/")
+        for base in SENSITIVE_HOST_MOUNTS
+        if base != "/"
+    )
+
+
+def _volume_host_paths(compose: dict) -> list[tuple[str, str]]:
+    """(том, путь хоста) из driver_opts томов верхнего уровня: device, mountpoint."""
+    volumes = (compose or {}).get("volumes") or {}
+    if not isinstance(volumes, dict):
+        return []
+    found = []
+    for name, spec in volumes.items():
+        opts = spec.get("driver_opts") if isinstance(spec, dict) else None
+        if not isinstance(opts, dict):
+            continue
+        for key in ("device", "mountpoint"):
+            if opts.get(key):
+                found.append((str(name), str(opts[key])))
+    return found
+
+
 def check_sensitive_host_mount(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
@@ -395,9 +468,11 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
         for vol in as_list(svc.get("volumes")):
             if isinstance(vol, dict):
                 source_path = str(vol.get("source", ""))
+            elif ":" not in str(vol):
+                continue  # '- /data' — анонимный том, каталог хоста не монтируется
             else:
                 source_path = str(vol).split(":")[0]
-            if source_path in SENSITIVE_HOST_MOUNTS:
+            if _is_sensitive_host_path(source_path):
                 findings.append(
                     (
                         f"service:{name}",
@@ -405,6 +480,18 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
                         _line(compose, name, "volumes"),
                     )
                 )
+    # Том верхнего уровня, привязанный к каталогу хоста, опасен для любого
+    # сервиса, который его подключит, поэтому находка относится к тому.
+    volume_line = getattr(compose, "volume_line", None)
+    for volume, path in _volume_host_paths(compose):
+        if _is_sensitive_host_path(path):
+            findings.append(
+                (
+                    f"volume:{volume}",
+                    f"том {volume} привязан к чувствительному пути хоста '{path}'",
+                    volume_line(volume) if callable(volume_line) else None,
+                )
+            )
     return findings
 
 
@@ -421,15 +508,33 @@ def check_flat_network(compose: dict) -> CheckResults:
     ]
 
 
+# Драйверы, которые оставляют журнал на самом хосте.
+LOCAL_LOG_DRIVERS = frozenset({"json-file", "local", "none"})
+
+
+def check_logs_not_centralized(compose: dict) -> CheckResults:
+    findings = []
+    for name, svc in _services(compose).items():
+        if not isinstance(svc, dict):
+            continue
+        logging = svc.get("logging")
+        driver = logging.get("driver") if isinstance(logging, dict) else None
+        driver = str(driver or "json-file").strip().lower()
+        if driver in LOCAL_LOG_DRIVERS:
+            detail = (
+                "logging.driver: none — журнал контейнера не ведётся"
+                if driver == "none"
+                else f"журнал контейнера остаётся на хосте (драйвер {driver})"
+            )
+            findings.append((f"service:{name}", detail, _line(compose, name, "logging")))
+    return findings
+
+
 ComposeCheck = Callable[[dict], CheckResults]
 
 
 def _service_scope(check: ComposeCheck) -> ComposeCheck:
-    """Прикладывает к находке строки, на которых её можно подавить.
-
-    Комментарий пишут в трёх местах: на заголовке сервиса, у директивы и
-    у конкретного элемента внутри неё. Работать должны все три.
-    """
+    """Добавляет строки для подавления: заголовок сервиса, директива, её элементы."""
 
     @wraps(check)
     def wrapped(compose: dict) -> CheckResults:
@@ -462,4 +567,5 @@ REGISTRY = {
     "C014": _service_scope(check_debug_mode_enabled),
     "C015": _service_scope(check_sensitive_host_mount),
     "C016": _service_scope(check_flat_network),
+    "C017": _service_scope(check_logs_not_centralized),
 }

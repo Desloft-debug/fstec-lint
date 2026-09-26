@@ -8,11 +8,10 @@ from .base import CheckResults, config_line
 
 
 def _values(settings: dict, key: str, default: str) -> Iterator[tuple[str, str, int | None]]:
-    """Значение директивы в глобальной секции и в каждом Match-блоке.
+    """Значение директивы в глобальной секции и в Match-блоках.
 
-    В глобальной секции подставляется умолчание sshd: отсутствие
-    директивы не равно безопасному значению. В Match-блоке судим только
-    о явно заданном — неуказанное наследуется сверху и уже проверено.
+    Для глобальной секции подставляется умолчание sshd. В Match-блоке
+    проверяется только явно заданное значение.
     """
     yield "", str(settings.get(key, default)), config_line(settings, key)
     for block in getattr(settings, "matches", []):
@@ -28,7 +27,9 @@ def check_permit_root_login(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "permitrootlogin", "prohibit-password"):
         value = raw.lower()
-        if value in ("yes", "without-password"):
+        # without-password — устаревший синоним prohibit-password (вход только
+        # по ключу), поэтому, как и умолчание, находкой не считается.
+        if value == "yes":
             findings.append(
                 (
                     f"sshd_config: PermitRootLogin{scope}",
@@ -75,7 +76,7 @@ def check_weak_protocol(settings: dict) -> CheckResults:
             findings.append(
                 (
                     f"sshd_config: Protocol{scope}",
-                    f"Protocol {raw} — включён устаревший небезопасный SSH-1",
+                    f"Protocol {raw} — указан SSH-1; OpenSSH 7.4+ директиву игнорирует",
                     line,
                 )
             )
@@ -114,7 +115,45 @@ def check_max_auth_tries(settings: dict) -> CheckResults:
     return findings
 
 
+def check_no_multifactor(settings: dict) -> CheckResults:
+    findings = []
+    for scope, raw, line in _values(settings, "authenticationmethods", "any"):
+        lists = raw.split()
+        # Каждый список через пробел — отдельный допустимый путь входа.
+        # Список из одного метода означает вход с одним фактором.
+        single = [item for item in lists if len(item.split(",")) < 2]
+        if raw.strip().lower() == "any" or single:
+            detail = (
+                "AuthenticationMethods не задан — достаточно одного фактора"
+                if raw.strip().lower() == "any"
+                else f"AuthenticationMethods {raw} — есть путь входа с одним фактором: "
+                + ", ".join(single)
+            )
+            findings.append((f"sshd_config: AuthenticationMethods{scope}", detail, line))
+    return findings
+
+
+# SILENT — синоним QUIET, так его выводит sshd -T.
+QUIET_LOG_LEVELS = frozenset({"quiet", "silent", "fatal", "error"})
+
+
+def check_failed_logins_not_logged(settings: dict) -> CheckResults:
+    findings = []
+    for scope, raw, line in _values(settings, "loglevel", "INFO"):
+        if raw.strip().lower() in QUIET_LOG_LEVELS:
+            findings.append(
+                (
+                    f"sshd_config: LogLevel{scope}",
+                    f"LogLevel {raw} — неудачные попытки входа не попадают в журнал",
+                    line,
+                )
+            )
+    return findings
+
+
 REGISTRY = {
+    "S007": check_no_multifactor,
+    "S008": check_failed_logins_not_logged,
     "S001": check_permit_root_login,
     "S002": check_password_authentication,
     "S003": check_permit_empty_passwords,

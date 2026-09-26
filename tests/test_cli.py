@@ -70,5 +70,5 @@ def test_list_rules_respects_select(tmp_path, capsys):
     main(["--list-rules", "--format", "json", "--select", "S0*"])
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["total"] == 6
-    assert {rule["id"] for rule in payload["rules"]} == {f"S00{n}" for n in range(1, 7)}
+    assert payload["total"] == 8
+    assert {rule["id"] for rule in payload["rules"]} == {f"S00{n}" for n in range(1, 9)}

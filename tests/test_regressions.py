@@ -1,9 +1,6 @@
 """Регрессии по разбору и фильтрации.
 
-Каждый тест здесь закрывает случай, в котором инструмент выдавал не
-ошибку, а тихо неверный результат: ложную находку либо потерю настоящей.
-Для линтера, которым готовятся к оценке соответствия, это худший вид
-поломки — отчёт выглядит нормально и читается как истина.
+Случаи, где раньше была ложная находка или пропуск настоящей.
 """
 
 from pathlib import Path
@@ -477,9 +474,7 @@ def test_compose_v1_is_reported_instead_of_passing_silently(tmp_path):
 def test_value_starting_with_a_dollar_but_not_a_reference_is_a_secret(value):
     """Не всякое значение с '$' в начале — подстановка.
 
-    '$$' в compose экранирует сам знак, то есть '$$ecretPa55' — это
-    литерал '$ecretPa55'. Раньше проверка отбрасывала по одному первому
-    символу и такие значения пропускала.
+    '$$ecretPa55' в compose — литерал '$ecretPa55'.
     """
     compose = {"services": {"app": {"environment": {"DB_PASSWORD": value}}}}
 
@@ -516,3 +511,83 @@ def test_dockerfile_detail_is_a_single_line(tmp_path):
     details = [f.detail for f in scan(tmp_path).findings if f.rule.id == "D005"]
 
     assert details and all("\n" not in detail for detail in details)
+
+
+# Найдены сверкой с размеченными примерами KICS (benchmarks/README.md).
+
+
+@pytest.mark.parametrize(
+    "healthcheck",
+    [{"test": ["NONE"]}, {"test": "NONE"}, {"disable": True}],
+)
+def test_disabled_healthcheck_is_reported(healthcheck):
+    compose = {"services": {"app": {"healthcheck": healthcheck}}}
+
+    assert len(compose_checks.check_missing_healthcheck(compose)) == 1
+
+
+@pytest.mark.parametrize(
+    ("option", "reported"),
+    [
+        ("no-new-privileges:false", True),
+        ("no-new-privileges=false", True),
+        ("no-new-privileges", False),
+        ("no-new-privileges:true", False),
+        ("no-new-privileges=true", False),
+    ],
+)
+def test_no_new_privileges_value_is_checked(option, reported):
+    compose = {"services": {"app": {"security_opt": [option]}}}
+
+    assert bool(compose_checks.check_missing_no_new_privileges(compose)) is reported
+
+
+@pytest.mark.parametrize(
+    ("volume", "reported"),
+    [
+        ("/etc/ssl:/etc/ssl:ro", True),
+        ("/etc/:/host-etc", True),
+        ({"type": "bind", "source": "/etc/exercise", "target": "/x"}, True),
+        ("/proc/1:/host-proc", True),
+        ("/etcetera:/data", False),
+        ("/var/run/docker.sock:/var/run/docker.sock", False),
+        ("./etc:/etc", False),
+        ("/srv/data:/data", True),
+        ("/opt/app:/app", False),
+        ("/var/lib/backup/data", False),
+    ],
+)
+def test_nested_sensitive_host_path_is_reported(volume, reported):
+    compose = {"services": {"app": {"volumes": [volume]}}}
+
+    assert bool(compose_checks.check_sensitive_host_mount(compose)) is reported
+
+
+@pytest.mark.parametrize(
+    "opts",
+    [
+        {"type": "none", "o": "bind", "device": "/etc"},
+        {"mountpoint": "/var/data"},
+    ],
+)
+def test_volume_bound_to_sensitive_host_path_is_reported(opts):
+    compose = {"services": {"app": {"image": "x"}}, "volumes": {"host": {"driver_opts": opts}}}
+
+    locations = [f[0] for f in compose_checks.check_sensitive_host_mount(compose)]
+
+    assert locations == ["volume:host"]
+
+
+def test_compose_merge_tags_are_parsed(tmp_path):
+    """!reset и !override раньше роняли разбор всего файла."""
+    _write(
+        tmp_path / "docker-compose.yml",
+        "services:\n  app:\n    image: nginx:1.27\n    ports: !reset []\n"
+        "    privileged: !reset null\n    volumes: !override\n      - /etc:/host\n",
+    )
+
+    result = scan(tmp_path)
+    rules = {f.rule.id for f in result.findings}
+
+    assert result.errors == []
+    assert "C015" in rules and "C002" not in rules

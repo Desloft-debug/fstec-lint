@@ -1,0 +1,7 @@
+myhostname = mail.example.test
+mydomain = example.test
+inet_interfaces = all
+mydestination = $myhostname, localhost.$mydomain, localhost
+smtpd_tls_cert_file = /etc/pki/tls/certs/mail.crt
+smtpd_tls_key_file = /etc/pki/tls/private/mail.key
+smtpd_tls_security_level = may
