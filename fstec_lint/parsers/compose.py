@@ -68,7 +68,9 @@ def _construct_override(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
         return loader.construct_mapping(node, deep=True)
     if isinstance(node, yaml.SequenceNode):
         return loader.construct_sequence(node, deep=True)
-    return loader.construct_scalar(node)
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    return None
 
 
 _ComposeLoader.add_constructor("!reset", _construct_reset)
