@@ -7,8 +7,8 @@
 Проверяет `docker-compose.yml`, `Dockerfile`, `postgresql.conf`,
 `pg_hba.conf`, `sshd_config`, юниты systemd, `nginx.conf`, `login.defs`,
 `pwquality.conf`, `/etc/default/useradd`, `rsyslog.conf` и `main.cf`
-почтового сервера Postfix, а также `.env`, `.env.*` и `*.env`. Правил 56, у каждого есть
-ссылка на пункт приказа ФСТЭК России N 117, подмеру методического
+почтового сервера Postfix, а также `.env`, `.env.*` и `*.env`.
+**56 правил**, у каждого есть ссылка на пункт приказа ФСТЭК России N 117, подмеру методического
 документа от 12.04.2026 и меру приказа N 21.
 
 ```
@@ -34,14 +34,21 @@ Trivy, Checkov, Lynis и Docker Bench находят похожие ошибки
 
 ## Установка
 
+Нужен Python 3.10 или новее. Зависимость одна — PyYAML.
+
+Версия **1.1.0** добавляет проверку `.env`-файлов. Пока тег релиза
+не опубликован, установите обновление из распакованного каталога исходников:
+
 ```bash
-pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.0.1"
+python -m pip install .
+fstec-lint --version
 ```
 
-Зависимость одна — PyYAML. Нужен Python 3.10 или новее.
+После публикации тега `v1.1.0` будет доступна установка из GitHub:
 
-Поддержка `.env` добавлена в готовящуюся версию 1.1.0. До публикации
-тега установите эту версию из каталога исходников: `pip install .`.
+```bash
+python -m pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.1.0"
+```
 
 ## Использование
 
@@ -111,6 +118,9 @@ services:
 Поддерживаются glob (`C0*`) и форма без списка — `# fstec-lint: ignore`.
 Работает во всех форматах. Число подавленных находок печатается в stderr.
 
+В `.env` подавление распознаётся только в настоящих комментариях:
+текст `fstec-lint: ignore` внутри значения переменной ничего не подавляет.
+
 Для всего прогона есть `--ignore` и `--select` (id или glob, через
 запятую). Шаблон, который не подошёл ни к одному правилу, считается
 ошибкой вызова.
@@ -140,7 +150,7 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 | `2` | ошибка вызова: неверный путь, некуда записать отчёт, повреждён baseline, опечатка в `--select`/`--ignore` |
 | `3` | находок выше порога нет, но часть файлов не удалось разобрать |
 
-Если есть и находки, и неразобранные файлы, возвращается `1`. Файл,
+Если есть находки выше порога и неразобранные файлы, возвращается `1`. Файл,
 который не удалось разобрать, пропускается с сообщением в stderr, скан
 продолжается.
 
@@ -158,10 +168,31 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 | E002 | Включён `DEBUG` / `*_DEBUG` | п. 34 б) |
 | E003 | Отключён TLS или проверка сертификата у Node.js, Git или libpq | п. 63 с) |
 
-Секреты не выводятся в отчёты и ошибки. Учитываются кавычки, комментарии,
-`export`, многострочные значения и номера строк. Окружение машины и
-команды из файла не исполняются. Шаблоны тоже проверяются: при
-необходимости исключите их через `--exclude '.env.example'`.
+Значения секретов из `.env` не выводятся в отчёты и ошибки разбора.
+Учитываются кавычки, комментарии, `export`, многострочные значения,
+UTF-8 BOM и номера строк. Окружение машины не подставляется,
+команды из файла не запускаются.
+
+E001 проверяет имена переменных, похожие на пароли, токены и ключи,
+а также пароли в URL подключения. Пустые значения, простые внешние
+ссылки `$VAR` / `${VAR}` и имена на `_FILE` / `_FILENAME` пропускаются.
+Непустой литеральный дефолт `${VAR:-password}` считается находкой.
+Одинарные кавычки делают значение литеральным, поэтому
+`PASSWORD='${VAR}'` тоже проверяется как секрет в открытом виде.
+
+E003 проверяет `NODE_TLS_REJECT_UNAUTHORIZED=0`, `PGSSLMODE=disable`
+и наличие `GIT_SSL_NO_VERIFY`. У Git даже пустое значение, `0` или
+`false` отключает проверку сертификата: переменную нужно удалить.
+
+```bash
+fstec-lint .env.production --select 'E*'
+fstec-lint . --select 'E*' --format json --output env-report.json
+fstec-lint . --select 'E*' --exclude '.env.example' --exclude '.env.local'
+```
+
+Шаблоны и локальные конфигурации проверяются наравне с production.
+Права доступа к файлу, история Git и связи `env_file` не анализируются;
+наличие секрета в файле само по себе не доказывает его публикацию.
 Синтаксис, точные условия и ограничения — в [`docs/dotenv.md`](docs/dotenv.md).
 
 **Docker Compose**
@@ -306,6 +337,7 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 | [`docs/authentication.md`](docs/authentication.md) | ГОСТ Р 58833-2020 и степень опасности |
 | [`docs/passport.md`](docs/passport.md) | паспорт уязвимости по ГОСТ Р 56545-2015 |
 | [`docs/rbpo.md`](docs/rbpo.md) | самооценка проекта по ГОСТ Р 56939-2024 |
+| [`docs/dotenv.md`](docs/dotenv.md) | проверка `.env`: синтаксис, правила и ограничения |
 
 ### Ограничения
 
@@ -360,7 +392,7 @@ $ fstec-lint examples/vulnerable-stack --fail-on none
 
 ...
 
-Итого находок: 62 (critical=11, high=13, medium=24, low=14)
+Итого находок: 67 (critical=11, high=17, medium=25, low=14)
 
 $ fstec-lint examples/hardened-stack
 fstec-lint: нарушений не найдено.
@@ -387,7 +419,12 @@ KICS (Docker Compose, Dockerfile) и сценариях ComplianceAsCode для 
 каталог `pwquality.conf.d`, всё исправлено. Методика, разбор каждого расхождения и
 команда для воспроизведения — в [`benchmarks/README.md`](benchmarks/README.md).
 
+Эти результаты относятся к указанным наборам и правилам. Правила `.env`
+E001–E003 покрыты тестами проекта; в приведённые внешние оценки они не входят.
+
 ## GitHub Actions
+
+Пример для версии 1.1.0; используйте его после публикации тега `v1.1.0`.
 
 ```yaml
 name: fstec-lint
@@ -398,7 +435,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Desloft-debug/fstec-lint@v1.0.1
+      - uses: Desloft-debug/fstec-lint@v1.1.0
         with:
           path: .
           format: html
@@ -438,9 +475,14 @@ mypy fstec_lint
 pytest
 ```
 
-В CI то же самое на Python 3.10–3.12, плюс `pip-audit` и прогон обоих
-стендов из `examples/` с проверкой кодов выхода. Тестов 482, покрытие
-около 95%.
+CI настроен на Python 3.10–3.12, аудит зависимостей через `pip-audit`
+и прогон обоих стендов из `examples/` с проверкой кодов выхода.
+
+При подготовке 1.1.0 на Windows с Python 3.12 прошли **482 теста**,
+покрытие составило **95,82%**. Новые проверки и парсер `.env` покрыты
+на 100%. Проверки Ruff, форматирования и Mypy прошли; аудит
+`constraints.txt` не нашёл известных уязвимостей. Матрица Python 3.10/3.11
+и Linux в этом локальном прогоне не запускалась.
 
 Об уязвимостях в самом инструменте — [`SECURITY.md`](SECURITY.md).
 История изменений — [`CHANGELOG.md`](CHANGELOG.md).
@@ -449,9 +491,8 @@ pytest
 
 - [ ] Режим проверки только рабочих конфигураций без тестовых файлов
 - [ ] Обновление привязки после выхода приказа взамен N 21
-- [x] Проверка `.env`-файлов
 - [ ] Раскрытие `include` в `postgresql.conf`
-- [ ] Правила для Kubernetes и nginx
+- [ ] Правила для Kubernetes
 
 ## Лицензия
 
@@ -461,7 +502,7 @@ MIT, см. [LICENSE](LICENSE).
 
 ## English
 
-`fstec-lint` checks Docker Compose, Dockerfile, PostgreSQL, sshd_config
+`fstec-lint` checks Docker Compose, Dockerfile, PostgreSQL, sshd_config,
 systemd units, nginx, login.defs, pwquality.conf, /etc/default/useradd, rsyslog.conf,
 Postfix main.cf and dotenv files, and maps each of its 56 rules to a clause of FSTEC
 Order No. 117 (in force since 2026-03-01), a submeasure of the FSTEC
@@ -470,18 +511,27 @@ The mapping is checked by tests against the text of the documents.
 
 Version 1.1.0 adds E001 (plaintext secrets and URL passwords), E002 (debug)
 and E003 (disabled TLS/certificate checks). Until the tag is published,
-install from this source directory with `pip install .`. Secret values
-are never included in reports. See [`docs/dotenv.md`](docs/dotenv.md) for scope.
+install from the unpacked source directory with `python -m pip install .`.
+Dotenv secret values are never included in reports or parsing errors.
+Templates and development files are scanned too; use `--exclude` when needed.
+See [`docs/dotenv.md`](docs/dotenv.md) for scope and limitations.
 
 Output formats: text, JSON, HTML, SARIF, vulnerability passports
 (GOST R 56545-2015) and a DOCX report formatted per GOST 7.32-2017.
 
 ```bash
-pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.0.1"
+python -m pip install .
+fstec-lint . --select 'E*'
 fstec-lint . --format html --output report.html
 fstec-lint . --format docx --output report.docx
 fstec-lint . --write-baseline .fstec-lint-baseline.json
 fstec-lint . --baseline .fstec-lint-baseline.json
+```
+
+After the `v1.1.0` tag is published, installation from GitHub will be available:
+
+```bash
+python -m pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1.1.0"
 ```
 
 Exit codes: `0` clean, `1` findings at or above `--fail-on` (default
