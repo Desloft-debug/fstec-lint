@@ -7,7 +7,7 @@
 Проверяет `docker-compose.yml`, `Dockerfile`, `postgresql.conf`,
 `pg_hba.conf`, `sshd_config`, юниты systemd, `nginx.conf`, `login.defs`,
 `pwquality.conf`, `/etc/default/useradd`, `rsyslog.conf` и `main.cf`
-почтового сервера Postfix. Правил 53, у каждого есть
+почтового сервера Postfix, а также `.env`, `.env.*` и `*.env`. Правил 56, у каждого есть
 ссылка на пункт приказа ФСТЭК России N 117, подмеру методического
 документа от 12.04.2026 и меру приказа N 21.
 
@@ -40,6 +40,9 @@ pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@v1
 
 Зависимость одна — PyYAML. Нужен Python 3.10 или новее.
 
+Поддержка `.env` добавлена в готовящуюся версию 1.1.0. До публикации
+тега установите эту версию из каталога исходников: `pip install .`.
+
 ## Использование
 
 ```bash
@@ -52,6 +55,7 @@ fstec-lint . --format json --output report.json
 fstec-lint . --fail-on critical                      # порог для кода выхода
 fstec-lint . --uz 3                                  # базовый набор мер для УЗ3
 fstec-lint --list-rules                              # каталог правил
+fstec-lint . --select 'E*'                           # только .env
 ```
 
 Файлы ищутся рекурсивно. Каталоги `.git`, `node_modules`, `vendor`,
@@ -145,6 +149,20 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 проекта.
 
 ## Что проверяется
+
+**Файлы окружения** (`.env`, `.env.*`, `*.env`)
+
+| Правило | Проблема | Приказ N 117 |
+|---|---|---|
+| E001 | Непустой секрет или пароль в URL хранится открытым текстом | п. 63 а) |
+| E002 | Включён `DEBUG` / `*_DEBUG` | п. 34 б) |
+| E003 | Отключён TLS или проверка сертификата у Node.js, Git или libpq | п. 63 с) |
+
+Секреты не выводятся в отчёты и ошибки. Учитываются кавычки, комментарии,
+`export`, многострочные значения и номера строк. Окружение машины и
+команды из файла не исполняются. Шаблоны тоже проверяются: при
+необходимости исключите их через `--exclude '.env.example'`.
+Синтаксис, точные условия и ограничения — в [`docs/dotenv.md`](docs/dotenv.md).
 
 **Docker Compose**
 
@@ -268,7 +286,7 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 
 **Приказ ФСТЭК России от 18.02.2013 N 21** действует для ИСПДн. Код меры
 хранится в поле `pdn_measure`. Флаг `--uz` оставляет правила из базового
-набора нужного уровня защищённости (для УЗ3 — 41 из 53). По умолчанию
+набора нужного уровня защищённости (для УЗ3 — 44 из 56). По умолчанию
 проверяются все правила, так как пп. 9 и 10 приказа допускают адаптацию
 набора. Проект замены приказа опубликован, но на дату выше не
 зарегистрирован.
@@ -421,7 +439,7 @@ pytest
 ```
 
 В CI то же самое на Python 3.10–3.12, плюс `pip-audit` и прогон обоих
-стендов из `examples/` с проверкой кодов выхода. Тестов 407, покрытие
+стендов из `examples/` с проверкой кодов выхода. Тестов 482, покрытие
 около 95%.
 
 Об уязвимостях в самом инструменте — [`SECURITY.md`](SECURITY.md).
@@ -431,7 +449,7 @@ pytest
 
 - [ ] Режим проверки только рабочих конфигураций без тестовых файлов
 - [ ] Обновление привязки после выхода приказа взамен N 21
-- [ ] Проверка `.env`-файлов
+- [x] Проверка `.env`-файлов
 - [ ] Раскрытие `include` в `postgresql.conf`
 - [ ] Правила для Kubernetes и nginx
 
@@ -444,10 +462,16 @@ MIT, см. [LICENSE](LICENSE).
 ## English
 
 `fstec-lint` checks Docker Compose, Dockerfile, PostgreSQL, sshd_config
-systemd units, nginx, login.defs, pwquality.conf, /etc/default/useradd, rsyslog.conf and Postfix main.cf, and maps each of its 53 rules to a clause of FSTEC
+systemd units, nginx, login.defs, pwquality.conf, /etc/default/useradd, rsyslog.conf,
+Postfix main.cf and dotenv files, and maps each of its 56 rules to a clause of FSTEC
 Order No. 117 (in force since 2026-03-01), a submeasure of the FSTEC
 guidance of 2026-04-12, and a measure of Order No. 21 for personal data.
 The mapping is checked by tests against the text of the documents.
+
+Version 1.1.0 adds E001 (plaintext secrets and URL passwords), E002 (debug)
+and E003 (disabled TLS/certificate checks). Until the tag is published,
+install from this source directory with `pip install .`. Secret values
+are never included in reports. See [`docs/dotenv.md`](docs/dotenv.md) for scope.
 
 Output formats: text, JSON, HTML, SARIF, vulnerability passports
 (GOST R 56545-2015) and a DOCX report formatted per GOST 7.32-2017.

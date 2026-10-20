@@ -13,6 +13,7 @@ import yaml
 from .checks import (
     compose_checks,
     dockerfile_checks,
+    dotenv_checks,
     linux_checks,
     nginx_checks,
     postfix_checks,
@@ -24,6 +25,7 @@ from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
 from .parsers.compose import parse_compose
 from .parsers.dockerfile import parse_dockerfile
+from .parsers.dotenv import EnvFile, parse_dotenv
 from .parsers.linux import (
     parse_login_defs,
     parse_pwquality,
@@ -50,6 +52,7 @@ PG_HBA_PATTERNS = ("pg_hba.conf",)
 SSHD_CONFIG_PATTERNS = ("sshd_config",)
 SYSTEMD_UNIT_PATTERNS = ("*.service",)
 DOCKERFILE_PATTERNS = ("Dockerfile", "Dockerfile.*", "*.dockerfile")
+DOTENV_PATTERNS = (".env", ".env.*", "*.env")
 LOGIN_DEFS_PATTERNS = ("login.defs",)
 PWQUALITY_PATTERNS = ("pwquality.conf",)
 RSYSLOG_PATTERNS = ("rsyslog.conf",)
@@ -164,15 +167,19 @@ def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
     return [p for p in patterns if not any(_matches_rule(rule.id, [p]) for rule in rules)]
 
 
-def inline_suppressions(path: Path) -> dict[int, set[str]]:
+def inline_suppressions(
+    path: Path, comments: Sequence[tuple[int, str]] | None = None
+) -> dict[int, set[str]]:
     """{строка: правила} из комментариев в файле. Пустой набор — все правила."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return {}
+    if comments is None:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return {}
+        comments = list(enumerate(text.splitlines(), start=1))
 
     suppressions: dict[int, set[str]] = {}
-    for lineno, line in enumerate(text.splitlines(), start=1):
+    for lineno, line in comments:
         match = SUPPRESSION_RE.search(line)
         if match is None:
             continue
@@ -249,6 +256,7 @@ def discover_files(
         "sshd_config": [],
         "systemd_unit": [],
         "dockerfile": [],
+        "dotenv": [],
         "login_defs": [],
         "pwquality": [],
         "rsyslog": [],
@@ -272,6 +280,8 @@ def discover_files(
             found["systemd_unit"].append(path)
         elif _matches_any(name, DOCKERFILE_PATTERNS):
             found["dockerfile"].append(path)
+        elif _matches_any(name, DOTENV_PATTERNS):
+            found["dotenv"].append(path)
         elif _matches_any(name, LOGIN_DEFS_PATTERNS):
             found["login_defs"].append(path)
         elif _matches_any(name, PWQUALITY_PATTERNS):
@@ -364,7 +374,8 @@ def _run_registry(
         kept = []
         for finding in file_findings:
             if finding.file not in suppressions:
-                suppressions[finding.file] = inline_suppressions(Path(finding.file))
+                comments = data.comments if isinstance(data, EnvFile) else None
+                suppressions[finding.file] = inline_suppressions(Path(finding.file), comments)
             if not _is_suppressed(finding, suppressions[finding.file]):
                 kept.append(finding)
         result.suppressed += len(file_findings) - len(kept)
@@ -401,6 +412,7 @@ def scan(
         ("sshd_config", sshd_checks.REGISTRY, parse_sshd_config),
         ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
+        ("dotenv", dotenv_checks.REGISTRY, parse_dotenv),
         ("login_defs", linux_checks.LOGIN_DEFS_REGISTRY, parse_login_defs),
         ("pwquality", linux_checks.PWQUALITY_REGISTRY, parse_pwquality),
         ("rsyslog", linux_checks.RSYSLOG_REGISTRY, parse_rsyslog),

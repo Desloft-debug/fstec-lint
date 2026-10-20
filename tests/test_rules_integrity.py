@@ -9,6 +9,7 @@ from fstec_lint import auth, measures, terms
 from fstec_lint.checks import (
     compose_checks,
     dockerfile_checks,
+    dotenv_checks,
     linux_checks,
     nginx_checks,
     postfix_checks,
@@ -21,6 +22,7 @@ from fstec_lint.engine import load_rules
 REGISTRY_BY_TARGET = {
     "compose": compose_checks.REGISTRY,
     "dockerfile": dockerfile_checks.REGISTRY,
+    "dotenv": dotenv_checks.REGISTRY,
     "pg_hba": postgres_checks.PG_HBA_REGISTRY,
     "postgresql_conf": postgres_checks.POSTGRESQL_CONF_REGISTRY,
     "sshd_config": sshd_checks.REGISTRY,

@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Статический аудит инфраструктуры (Docker Compose, Dockerfile, "
             "PostgreSQL, sshd_config, systemd, login.defs, pwquality, rsyslog, "
-            "nginx) с привязкой находок к мерам "
+            "nginx, .env) с привязкой находок к мерам "
             "защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)."
         ),
     )
