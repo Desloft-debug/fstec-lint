@@ -60,16 +60,24 @@ jobs:
           pip install pip-audit
           pip-audit --strict -r constraints.txt
 
-  test:
+    test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+    env:
+      TEMP: ${{ github.workspace }}/.pytest-tmp
+      TMP: ${{ github.workspace }}/.pytest-tmp
+      TMPDIR: ${{ github.workspace }}/.pytest-tmp
+      PYTEST_DEBUG_TEMPROOT: ${{ github.workspace }}/.pytest-tmp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Prepare test temporary directory
+        run: mkdir -p "$PYTEST_DEBUG_TEMPROOT"
       - run: pip install -e ".[dev]" -c constraints.txt
       - run: pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 
