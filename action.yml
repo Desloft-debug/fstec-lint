@@ -33,26 +33,37 @@ runs:
 
     - name: Install fstec-lint
       shell: bash
-      # Ставится та же ревизия, что и у самого Action (uses: ...@v1.0.1),
-      # иначе инструмент приезжал бы с main. Пустой action_ref — вызов из
-      # локального пути (./): ставится из чекаута.
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+      # Ставим ту же ревизию, с которой вызван сам Action: без этого
+      # 'uses: ...@v1.0.0' закрепляет обёртку, а инструмент всё равно
+      # приезжал бы с HEAD и прогон перестал бы быть воспроизводимым.
+      #
+      # Пустой action_ref означает вызов из локального пути (./), где
+      # ревизии нет — тогда ставим из самого чекаута, а не из 'main':
+      # подменять без предупреждения версию инструмента нельзя.
       run: |
         set -eu
-        ref="${{ github.action_ref }}"
+        ref="$ACTION_REF"
         if [ -n "$ref" ]; then
           pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@${ref}"
         else
-          pip install "${{ github.action_path }}"
+          pip install -- "$ACTION_PATH"
         fi
         fstec-lint --version
 
     - name: Run fstec-lint
       shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        REPORT_FORMAT: ${{ inputs.format }}
+        REPORT_OUTPUT: ${{ inputs.output }}
+        FAIL_ON: ${{ inputs.fail-on }}
       run: |
-        fstec-lint "${{ inputs.path }}" \
-          --format "${{ inputs.format }}" \
-          --output "${{ inputs.output }}" \
-          --fail-on "${{ inputs.fail-on }}"
+        fstec-lint --format="$REPORT_FORMAT" \
+          --output="$REPORT_OUTPUT" \
+          --fail-on="$FAIL_ON" -- "$SCAN_PATH"
 
     - name: Upload report
       if: always()

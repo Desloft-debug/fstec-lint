@@ -4,12 +4,20 @@ from pathlib import Path
 
 from .base import ConfigMap
 
-# Комментарий в systemd — только строка, начинающаяся с '#' или ';'.
+# systemd считает комментарием строку, которая ЦЕЛИКОМ начинается с '#'
+# или ';'. В середине значения это обычные символы, и вырезание хвоста по
+# ним рвало настоящие значения:
+#   Environment="PATH=/usr/local/bin;/usr/bin" -> '"PATH=/usr/local/bin'
+#   ExecStart=/bin/sh -c 'setup ; run'         -> "/bin/sh -c 'setup"
 COMMENT_PREFIXES = ("#", ";")
 
 
 def _logical_lines(raw_lines: list[str]) -> list[tuple[int, str]]:
-    """Склеивает продолжения строк ('\\' в конце)."""
+    """Склеивает продолжения строк ('\\' в конце) в логические директивы.
+
+    Иначе парсер терял хвост значения и заводил ключи из кусков команды:
+    '--user' из 'ExecStart=/x \\' + '--user=app'.
+    """
     logical: list[tuple[int, str]] = []
     buffer = ""
     start = 0
@@ -30,7 +38,12 @@ def _logical_lines(raw_lines: list[str]) -> list[tuple[int, str]]:
 
 
 def parse_systemd_unit(path: Path) -> dict[str, ConfigMap]:
-    """Разбирает юнит systemd; при повторе ключа действует последнее значение."""
+    """Разбирает юнит systemd (*.service) в dict {секция: ConfigMap}.
+
+    При повторе ключа внутри секции побеждает последнее вхождение —
+    этого достаточно для проверки boolean/одиночных директив вроде
+    NoNewPrivileges или User.
+    """
     sections: dict[str, ConfigMap] = {}
     current: ConfigMap | None = None
     with open(path, encoding="utf-8") as f:

@@ -10,30 +10,17 @@ from typing import Any
 
 import yaml
 
-from .checks import (
-    compose_checks,
-    dockerfile_checks,
-    dotenv_checks,
-    linux_checks,
-    nginx_checks,
-    postfix_checks,
-    postgres_checks,
-    sshd_checks,
-    systemd_checks,
-)
+from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
 from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
-from .parsers.compose import parse_compose
-from .parsers.dockerfile import parse_dockerfile
-from .parsers.dotenv import EnvFile, parse_dotenv
-from .parsers.linux import (
-    parse_login_defs,
-    parse_pwquality,
-    parse_rsyslog,
-    parse_useradd_defaults,
+from .parsers.compose import (
+    MAX_FILE_BYTES,
+    _BoundedLoader,
+    _guard_graph,
+    _guard_merges,
+    parse_compose,
 )
-from .parsers.nginx import parse_nginx
-from .parsers.postfix import parse_postfix_main
+from .parsers.dockerfile import parse_dockerfile
 from .parsers.postgres import parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
 from .parsers.systemd import parse_systemd_unit
@@ -52,21 +39,14 @@ PG_HBA_PATTERNS = ("pg_hba.conf",)
 SSHD_CONFIG_PATTERNS = ("sshd_config",)
 SYSTEMD_UNIT_PATTERNS = ("*.service",)
 DOCKERFILE_PATTERNS = ("Dockerfile", "Dockerfile.*", "*.dockerfile")
-DOTENV_PATTERNS = (".env", ".env.*", "*.env")
-LOGIN_DEFS_PATTERNS = ("login.defs",)
-PWQUALITY_PATTERNS = ("pwquality.conf",)
-RSYSLOG_PATTERNS = ("rsyslog.conf",)
-NGINX_PATTERNS = ("nginx.conf",)
-# Имена общие, поэтому нужен признак в пути: default/useradd, postfix/main.cf.
-USERADD_DEFAULTS = ("default", "useradd")
-POSTFIX_MAIN = "main.cf"
-# Файлы сайтов nginx, которые проверяются отдельно, если рядом нет nginx.conf.
-NGINX_SITE_DIRS = frozenset({"conf.d", "sites-available", "sites-enabled", "http.d"})
 
-# Сторонние и служебные каталоги, которые не сканируются.
+# Каталоги со сторонним и служебным содержимым: конфиги внутри них не
+# наши и правятся не нами, а на большом репозитории они дают основную
+# массу шума и времени обхода.
 DEFAULT_EXCLUDED_DIRS = frozenset(
     {
         ".git",
+        ".agent-runs",
         ".hg",
         ".svn",
         ".tox",
@@ -83,9 +63,15 @@ DEFAULT_EXCLUDED_DIRS = frozenset(
     }
 )
 
+PRODUCTION_EXCLUDED_DIRS = frozenset(
+    {"test", "tests", "fixture", "fixtures", "example", "examples", "demo", "demos"}
+)
+
 CheckFn = Callable[[Any], CheckResults]
 
-# Подавление в самом файле; действует на свою и следующую строку:
+# Подавление находки прямо в проверяемом файле: комментарий действует на
+# свою строку и на следующую, чтобы его можно было писать и в хвосте
+# строки, и над ней (в YAML хвост не всегда читаем).
 #   ports: ["5432:5432"]  # fstec-lint: ignore C005
 #   # fstec-lint: ignore
 SUPPRESSION_RE = re.compile(r"fstec-lint:\s*ignore(?P<rules>[A-Za-z0-9,*\s]*)", re.IGNORECASE)
@@ -106,16 +92,73 @@ class ScanResult:
     suppressed: int = 0
 
 
+class RulesError(ValueError):
+    """Безопасная диагностика некорректного набора правил."""
+
+
 def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
     rules: list[Rule] = []
-    for yaml_file in sorted(rules_dir.glob("*.yaml")):
-        raw = yaml.safe_load(yaml_file.read_text(encoding="utf-8")) or []
-        for item in raw:
+    try:
+        rule_files = sorted(p for p in rules_dir.iterdir() if p.match("*.yaml"))
+    except OSError:
+        raise RulesError("не удалось прочитать каталог правил") from None
+    for yaml_file in rule_files:
+        try:
+            with yaml_file.open("rb") as source:
+                content = source.read(MAX_FILE_BYTES + 1)
+            if len(content) > MAX_FILE_BYTES:
+                raise ValueError("rules YAML resource limit exceeded")
+            loader = _BoundedLoader(content.decode("utf-8"))
+            try:
+                node = loader.get_single_node()
+                _guard_graph(node)
+                _guard_merges(node)
+                raw = loader.construct_document(node) if node is not None else []
+            finally:
+                loader.dispose()
+        except Exception:
+            raise RulesError("недопустимый YAML правил или превышен лимит") from None
+        if not isinstance(raw, list):
+            raise RulesError("набор правил должен быть списком")
+        for index, item in enumerate(raw, 1):
+            required = (
+                "id",
+                "title",
+                "severity",
+                "measure",
+                "description",
+                "remediation",
+                "target",
+            )
+            optional = (
+                "measure_title",
+                "orders",
+                "submeasure",
+                "submeasure_title",
+                "activity",
+                "activity_title",
+                "cwe",
+                "weakness_type",
+                "pdn_measure",
+                "pdn_measure_title",
+            )
+            if not isinstance(item, dict):
+                raise RulesError(f"правила: запись {index} должна быть объектом")
+            for key in required:
+                if not isinstance(item.get(key), str):
+                    raise RulesError(f"правила: запись {index}, недопустимое поле {key}")
+            for key in optional:
+                if key in item and not isinstance(item[key], str):
+                    raise RulesError(f"правила: запись {index}, недопустимое поле {key}")
+            try:
+                severity = Severity.from_str(item["severity"])
+            except ValueError:
+                raise RulesError(f"правила: запись {index}, недопустимое поле severity") from None
             rules.append(
                 Rule(
                     id=item["id"],
                     title=item["title"],
-                    severity=Severity.from_str(item["severity"]),
+                    severity=severity,
                     measure=item["measure"],
                     measure_title=item.get("measure_title", ""),
                     description=" ".join(item["description"].split()),
@@ -156,7 +199,11 @@ def filter_rules(
 
 
 def filter_by_uz(rules: list[Rule], level: int | None) -> list[Rule]:
-    """Правила, чья мера входит в базовый набор приказа N 21 для уровня УЗ."""
+    """Правила, чья мера входит в базовый набор для уровня УЗ.
+
+    Наборы заданы приложением к приказу N 21. Мера вне набора применяется
+    при адаптации (пункты 9 и 10), так что фильтр только сужает проверку.
+    """
     if level is None:
         return rules
     return [rule for rule in rules if in_base_set(rule.pdn_measure, level)]
@@ -167,19 +214,20 @@ def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
     return [p for p in patterns if not any(_matches_rule(rule.id, [p]) for rule in rules)]
 
 
-def inline_suppressions(
-    path: Path, comments: Sequence[tuple[int, str]] | None = None
-) -> dict[int, set[str]]:
-    """{строка: правила} из комментариев в файле. Пустой набор — все правила."""
-    if comments is None:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return {}
-        comments = list(enumerate(text.splitlines(), start=1))
+def inline_suppressions(path: Path) -> dict[int, set[str]]:
+    """{строка: набор правил} из комментариев в самом файле.
+
+    Пустой набор означает «подавить любое правило на этой строке».
+    Комментарий действует на свою строку и на следующую.
+    """
+    with path.open("rb") as source:
+        data = source.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        raise ValueError("suppression resource limit exceeded")
+    text = data.decode("utf-8")
 
     suppressions: dict[int, set[str]] = {}
-    for lineno, line in comments:
+    for lineno, line in enumerate(text.splitlines(), start=1):
         match = SUPPRESSION_RE.search(line)
         if match is None:
             continue
@@ -187,12 +235,14 @@ def inline_suppressions(
         rules = {token.upper() for token in raw}
         for target in (lineno, lineno + 1):
             if not rules:
-                # Подавление без списка правил перекрывает любой список.
+                # Сплошное подавление поглощает любой перечень правил...
                 suppressions[target] = set()
                 continue
             already = suppressions.get(target)
             if already is not None and not already:
-                # Строка уже подавлена целиком.
+                # ...и обратно им не сужается: комментарий '# fstec-lint:
+                # ignore' на строке выше глушит строку целиком, даже если
+                # на ней самой перечислены отдельные правила.
                 continue
             suppressions.setdefault(target, set()).update(rules)
     return suppressions
@@ -215,17 +265,38 @@ def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
 
 
 def _candidate_files(
-    root: Path, exclude: Sequence[str], on_error: Callable[[OSError], None] | None = None
+    root: Path,
+    exclude: Sequence[str],
+    on_error: Callable[[OSError], None] | None = None,
+    *,
+    production_only: bool = False,
 ) -> list[Path]:
     if root.is_file():
         return [root]
 
-    # Без onerror os.walk молча пропускает нечитаемые каталоги.
+    # Без onerror os.walk проглатывает ошибки листинга, и каталог без
+    # прав давал ноль находок, ноль ошибок и код 0.
     def _report(error: OSError) -> None:
         if on_error is not None:
             on_error(error)
 
     candidates: list[Path] = []
+    try:
+        boundary = root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        _report(OSError(0, "cannot resolve scan root", str(root)))
+        return candidates
+
+    def contained(path: Path) -> bool:
+        try:
+            if path.resolve(strict=True).is_relative_to(boundary):
+                return True
+        except (OSError, RuntimeError):
+            pass
+        _report(OSError(0, "path outside scan root or cannot resolve", str(path)))
+        return False
+
+    ancestry: dict[Path, tuple[Path, ...]] = {root: (boundary,)}
     for dirpath, dirnames, filenames in os.walk(root, onerror=_report):
         current = Path(dirpath)
         # Обрезаем дерево на месте: в node_modules и .git незачем заходить.
@@ -233,14 +304,32 @@ def _candidate_files(
             d
             for d in dirnames
             if d not in DEFAULT_EXCLUDED_DIRS
+            and not (production_only and d in PRODUCTION_EXCLUDED_DIRS)
             and not _is_excluded(d, (current / d).relative_to(root).as_posix(), exclude)
+            and contained(current / d)
         ]
         dirnames.sort()
+        children = []
+        for name in dirnames:
+            path = current / name
+            try:
+                resolved = path.resolve(strict=True)
+            except (OSError, RuntimeError):
+                _report(OSError(0, "cannot resolve directory", str(path)))
+                continue
+            parents = ancestry[current]
+            if resolved in parents:
+                _report(OSError(0, "directory cycle", str(path)))
+                continue
+            ancestry[path] = (*parents, resolved)
+            children.append(name)
+        dirnames[:] = children
         for filename in sorted(filenames):
             path = current / filename
             if _is_excluded(filename, path.relative_to(root).as_posix(), exclude):
                 continue
-            candidates.append(path)
+            if contained(path):
+                candidates.append(path)
     return candidates
 
 
@@ -248,6 +337,8 @@ def discover_files(
     root: Path,
     exclude: Sequence[str] = (),
     on_error: Callable[[OSError], None] | None = None,
+    *,
+    production_only: bool = False,
 ) -> dict[str, list[Path]]:
     found: dict[str, list[Path]] = {
         "compose": [],
@@ -256,17 +347,9 @@ def discover_files(
         "sshd_config": [],
         "systemd_unit": [],
         "dockerfile": [],
-        "dotenv": [],
-        "login_defs": [],
-        "pwquality": [],
-        "rsyslog": [],
-        "nginx": [],
-        "useradd_defaults": [],
-        "postfix_main": [],
     }
-    nginx_sites: list[Path] = []
 
-    for path in _candidate_files(root, exclude, on_error):
+    for path in _candidate_files(root, exclude, on_error, production_only=production_only):
         name = path.name
         if _matches_any(name, COMPOSE_FILE_PATTERNS):
             found["compose"].append(path)
@@ -280,58 +363,36 @@ def discover_files(
             found["systemd_unit"].append(path)
         elif _matches_any(name, DOCKERFILE_PATTERNS):
             found["dockerfile"].append(path)
-        elif _matches_any(name, DOTENV_PATTERNS):
-            found["dotenv"].append(path)
-        elif _matches_any(name, LOGIN_DEFS_PATTERNS):
-            found["login_defs"].append(path)
-        elif _matches_any(name, PWQUALITY_PATTERNS):
-            found["pwquality"].append(path)
-        elif _matches_any(name, RSYSLOG_PATTERNS):
-            found["rsyslog"].append(path)
-        elif _matches_any(name, NGINX_PATTERNS):
-            found["nginx"].append(path)
-        elif name.endswith(".conf") and _is_nginx_site(path, root):
-            nginx_sites.append(path)
-        elif (path.parent.name, name) == USERADD_DEFAULTS:
-            found["useradd_defaults"].append(path)
-        elif name == POSTFIX_MAIN and _has_part(path, root, "postfix"):
-            found["postfix_main"].append(path)
-    # Файл сайта уже читается через include основного nginx.conf.
-    roots = {p.parent for p in found["nginx"]}
-    found["nginx"].extend(p for p in nginx_sites if p.parent.parent not in roots)
     return found
 
 
-def _has_part(path: Path, root: Path, word: str) -> bool:
-    """Есть ли word в одном из трёх ближайших каталогов внутри root."""
-    try:
-        parts = path.parent.relative_to(root).parts
-    except ValueError:
-        parts = path.parent.parts
-    return any(word in part.lower() for part in parts[-3:])
-
-
-def _is_nginx_site(path: Path, root: Path) -> bool:
-    """Файл в conf.d и подобных каталогах, если выше по пути есть «nginx»."""
-    return path.parent.name in NGINX_SITE_DIRS and _has_part(path.parent, root, "nginx")
-
-
 def _describe(exc: Exception) -> str:
-    return " ".join(f"{type(exc).__name__}: {exc}".split())
+    # Exception text can contain input lines and credentials. YAML marks carry
+    # useful position information, but their string representation has a snippet.
+    name = type(exc).__name__
+    if isinstance(exc, yaml.MarkedYAMLError) and exc.problem_mark is not None:
+        mark = exc.problem_mark
+        return f"{name} (строка {mark.line + 1}, столбец {mark.column + 1})"
+    return name
+
+
+_COMPOSE_V1_ERROR = (
+    "нет ни одного ключа верхнего уровня современного compose "
+    "(configs, include, name, networks, secrets, services, version, volumes) — похоже на формат "
+    "docker-compose v1, который не поддерживается"
+)
 
 
 def _finding(rule: Rule, path: Path, item: CheckResult) -> Finding:
     """Собирает Finding из 3- или 4-элементного результата проверки."""
     location, detail, line = item[0], item[1], item[2]
     suppress_lines = item[3] if len(item) > 3 else ()
-    # Строка из файла, подключённого через Include, несёт имя этого файла.
-    source = getattr(line, "file", None)
     return Finding(
         rule=rule,
-        file=source or str(path),
+        file=str(path),
         location=location,
         detail=detail,
-        line=int(line) if line is not None else None,
+        line=line,
         suppress_lines=tuple(suppress_lines or ()),
     )
 
@@ -342,18 +403,31 @@ def _run_registry(
     rules: list[Rule],
     registry: Mapping[str, CheckFn],
     parse: Callable[[Path], Any],
+    boundary: Path | None,
 ) -> None:
     for path in paths:
-        # Битый файл попадает в ошибки, остальные проверяются дальше.
+        # Один битый или бинарный файл не должен ронять весь прогон:
+        # имя файла с расширением .service ещё не гарантирует, что внутри
+        # текстовый юнит systemd.
         try:
+            if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
+                raise ValueError("path outside scan root")
             data = parse(path)
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
+            description = _describe(exc)
+            if (
+                parse is parse_compose
+                and type(exc) is ValueError
+                and exc.args == (_COMPOSE_V1_ERROR,)
+            ):
+                description = _COMPOSE_V1_ERROR
             result.errors.append(
-                ScanError(file=str(path), message=f"не удалось разобрать: {_describe(exc)}")
+                ScanError(file=str(path), message=f"не удалось разобрать: {description}")
             )
             continue
 
-        # Сбой одной проверки не отменяет результаты остальных.
+        # По одной, а не всем блоком: падение любой проверки уничтожало
+        # найденное другими правилами и выглядело как ошибка разбора.
         file_findings: list[Finding] = []
         for rule in rules:
             check_fn = registry.get(rule.id)
@@ -369,15 +443,19 @@ def _run_registry(
                     )
                 )
 
-        # Подавления читаются из того файла, куда указывает находка.
-        suppressions: dict[str, dict[int, set[str]]] = {}
-        kept = []
-        for finding in file_findings:
-            if finding.file not in suppressions:
-                comments = data.comments if isinstance(data, EnvFile) else None
-                suppressions[finding.file] = inline_suppressions(Path(finding.file), comments)
-            if not _is_suppressed(finding, suppressions[finding.file]):
-                kept.append(finding)
+        try:
+            if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
+                raise ValueError("path outside scan root")
+            suppressions = inline_suppressions(path)
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+            result.errors.append(
+                ScanError(
+                    file=str(path), message=f"не удалось прочитать подавления: {_describe(exc)}"
+                )
+            )
+            result.findings.extend(file_findings)
+            continue
+        kept = [f for f in file_findings if not _is_suppressed(f, suppressions)]
         result.suppressed += len(file_findings) - len(kept)
         result.findings.extend(kept)
 
@@ -389,6 +467,8 @@ def scan(
     select: Sequence[str] = (),
     ignore: Sequence[str] = (),
     uz: int | None = None,
+    *,
+    production_only: bool = False,
 ) -> ScanResult:
     """Сканирует root и возвращает находки (по убыванию severity) и ошибки разбора."""
     rules_by_target: dict[str, list[Rule]] = {}
@@ -403,7 +483,14 @@ def scan(
             ScanError(file=str(target), message=f"не удалось обойти каталог: {_describe(error)}")
         )
 
-    files = discover_files(root, exclude, _walk_error)
+    files = discover_files(root, exclude, _walk_error, production_only=production_only)
+    try:
+        boundary = None if root.is_file() else root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        result.errors.append(
+            ScanError(file=str(root), message=f"не удалось определить границу: {_describe(exc)}")
+        )
+        return result
 
     registries: list[tuple[str, Mapping[str, CheckFn], Callable[[Path], Any]]] = [
         ("compose", compose_checks.REGISTRY, parse_compose),
@@ -412,20 +499,15 @@ def scan(
         ("sshd_config", sshd_checks.REGISTRY, parse_sshd_config),
         ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
-        ("dotenv", dotenv_checks.REGISTRY, parse_dotenv),
-        ("login_defs", linux_checks.LOGIN_DEFS_REGISTRY, parse_login_defs),
-        ("pwquality", linux_checks.PWQUALITY_REGISTRY, parse_pwquality),
-        ("rsyslog", linux_checks.RSYSLOG_REGISTRY, parse_rsyslog),
-        ("nginx", nginx_checks.REGISTRY, parse_nginx),
-        ("useradd_defaults", linux_checks.USERADD_REGISTRY, parse_useradd_defaults),
-        ("postfix_main", postfix_checks.REGISTRY, parse_postfix_main),
     ]
     for target, registry, parse in registries:
         target_rules = rules_by_target.get(target, [])
-        # Нет активных правил для этого типа — файлы не разбираем.
+        # Ни одного активного правила для этого типа файлов — разбирать
+        # их незачем. Иначе --select/--ignore не спасали от битого файла
+        # отключённого типа: он всё равно давал ошибку разбора и код 3.
         if not target_rules:
             continue
-        _run_registry(result, files[target], target_rules, registry, parse)
+        _run_registry(result, files[target], target_rules, registry, parse, boundary)
 
     result.findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id, f.location))
     result.errors.sort(key=lambda e: e.file)

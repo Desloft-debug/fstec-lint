@@ -1,7 +1,9 @@
 """Проверки docker-compose.yml.
 
-Каждая функция возвращает (location, detail, line) на нарушение.
-Метаданные правил — в rules/compose_rules.yaml, связь по id в REGISTRY.
+Функции принимают распарсенный compose и возвращают
+(location, detail, line) для каждого нарушения; line — строка объявления
+сервиса или None, если она неизвестна. Severity/мера/remediation —
+в rules/compose_rules.yaml, привязка по id через REGISTRY внизу файла.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import re
 from collections.abc import Callable
 from functools import wraps
 
+from ..parsers.compose import MAX_YAML_DEPTH, MAX_YAML_EXPANDED_COST
 from .base import CheckResult, CheckResults, as_list, is_root_user
 
 SENSITIVE_PORTS = {"5432", "3306", "6379", "27017", "9200", "1433", "11211"}
@@ -19,44 +22,119 @@ SECRET_KEY_RE = re.compile(
 DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "ALL", "SYS_PTRACE", "SYS_MODULE"}
 SAFE_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 DOCKER_API_PORTS = {"2375", "2376"}
-# Системные каталоги хоста. Перечень совпадает с isOSDir из KICS: лишнее
-# срабатывание на данных в /var или /srv дешевле пропущенного /etc.
-SENSITIVE_HOST_MOUNTS = {
-    "/",
-    "/bin",
-    "/boot",
-    "/cdrom",
-    "/dev",
-    "/etc",
-    "/home",
-    "/lib",
-    "/lib64",
-    "/media",
-    "/proc",
-    "/root",
-    "/run",
-    "/sbin",
-    "/selinux",
-    "/srv",
-    "/sys",
-    "/usr",
-    "/var",
-}
+SENSITIVE_HOST_MOUNTS = {"/", "/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
 DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
 DEBUG_TRUTHY = {"1", "true", "yes", "on"}
-# ${DB_PASSWORD:-changeme}: значение по умолчанию лежит в репозитории.
-ENV_DEFAULT_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]([^}]*)\}$")
-# Значение целиком — подстановка: $VAR, ${VAR}, ${VAR:?err}.
-# '$ecretPa55' подстановкой не считается.
+# ${DB_PASSWORD:-changeme} — подстановка со значением по умолчанию:
+# сама ссылка безопасна, а вот дефолт в ней лежит в репозитории.
+ENV_DEFAULT_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:?[\-+=]([^}]*)\}$")
+# Подстановка compose целиком: $VAR, ${VAR}, ${VAR:?err} и т. п. Литерал,
+# который просто начинается с '$' ('$ecretPa55'), подстановкой не является
+# и обязан проверяться как секрет в открытом виде.
 ENV_SUBSTITUTION_RE = re.compile(r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)$")
 
 
+def _guard_graph(root: object) -> None:
+    """Bound direct API inputs before any check can format or traverse them."""
+    completed: dict[int, tuple[int, int]] = {}
+    active: set[int] = set()
+
+    def visit(value: object, depth: int) -> tuple[int, int]:
+        if depth > MAX_YAML_DEPTH:
+            raise ValueError("Compose resource limit exceeded")
+        if type(value) in (str, int, float, bool, type(None)):
+            if type(value) is str:
+                cost = 32 + 12 * len(value)
+            elif type(value) is int:
+                cost = 32 + 12 * (value.bit_length() + 1)
+            else:
+                cost = 64
+            if cost > MAX_YAML_EXPANDED_COST:
+                raise ValueError("Compose resource limit exceeded")
+            return cost, 1
+        if not isinstance(value, (dict, list)) or type(value) not in (dict, list) and depth != 1:
+            raise ValueError("unsupported Compose shape")
+        ident = id(value)
+        if ident in active:
+            raise ValueError("Compose resource limit exceeded")
+        if ident in completed:
+            cost, height = completed[ident]
+            if depth + height - 1 > MAX_YAML_DEPTH:
+                raise ValueError("Compose resource limit exceeded")
+            return cost, height
+        active.add(ident)
+        cost, height = 32, 1
+        children = (
+            (item for pair in value.items() for item in pair)
+            if isinstance(value, dict)
+            else iter(value)
+        )
+        for child in children:
+            child_cost, child_height = visit(child, depth + 1)
+            cost += child_cost
+            height = max(height, child_height + 1)
+            if cost > MAX_YAML_EXPANDED_COST:
+                raise ValueError("Compose resource limit exceeded")
+        active.remove(ident)
+        completed[ident] = cost, height
+        return cost, height
+
+    visit(root, 1)
+
+
+def _scalar(value: object) -> bool:
+    return type(value) in (str, int, float, bool, type(None))
+
+
 def _services(compose: dict) -> dict:
-    return (compose or {}).get("services", {}) or {}
+    _guard_graph(compose)
+    if not isinstance(compose, dict):
+        raise ValueError("unsupported Compose shape")
+    services = compose.get("services", {})
+    if services is None:
+        services = {}
+    if not isinstance(services, dict):
+        raise ValueError("unsupported Compose shape")
+    for name, svc in services.items():
+        if not _scalar(name) or not isinstance(svc, dict):
+            raise ValueError("unsupported Compose shape")
+        for field in ("user", "image"):
+            value = svc.get(field)
+            if not _scalar(value) or (
+                field == "image" and value is not None and not isinstance(value, str)
+            ):
+                raise ValueError("unsupported Compose shape")
+        env = svc.get("environment")
+        if env is not None:
+            if isinstance(env, dict):
+                if any(not _scalar(k) or not _scalar(v) for k, v in env.items()):
+                    raise ValueError("unsupported Compose shape")
+            elif not isinstance(env, list) or any(not isinstance(item, str) for item in env):
+                raise ValueError("unsupported Compose shape")
+        for field in ("cap_add", "security_opt", "ports", "volumes"):
+            value = svc.get(field)
+            entries = value if isinstance(value, list) else ([] if value is None else [value])
+            for item in entries:
+                if isinstance(item, dict) and field in ("ports", "volumes"):
+                    if field == "ports" and any(not _scalar(v) for v in item.values()):
+                        raise ValueError("unsupported Compose shape")
+                    if field == "volumes" and not _scalar(item.get("source")):
+                        raise ValueError("unsupported Compose shape")
+                elif not _scalar(item):
+                    raise ValueError("unsupported Compose shape")
+        deploy = svc.get("deploy")
+        if isinstance(deploy, dict) and not isinstance(deploy.get("resources", {}), dict):
+            raise ValueError("unsupported Compose shape")
+    return services
 
 
 def _line(compose: dict, service: str, *keys: str) -> int | None:
-    """Строка нарушающей директивы (самый ранний из ключей) или сервиса."""
+    """Строка нарушающей директивы сервиса, если compose разобран parse_compose.
+
+    Находка привязывается к самому раннему из переданных ключей, а не к
+    объявлению сервиса: иначе '# fstec-lint: ignore C005' над строкой
+    'ports' не срабатывал, потому что находка числилась на 'db:'.
+    """
     key_line = getattr(compose, "key_line", None)
     if callable(key_line):
         return key_line(service, *keys)
@@ -109,35 +187,34 @@ def check_dangerous_capabilities(compose: dict) -> CheckResults:
             continue
         caps = as_list(svc.get("cap_add"))
         bad = [str(c) for c in caps if str(c).upper() in DANGEROUS_CAPS]
-        dropped = {str(c).upper() for c in as_list(svc.get("cap_drop"))}
-        problems = []
         if bad:
-            problems.append(f"добавлены опасные capabilities: {', '.join(bad)}")
-        if "ALL" not in dropped:
-            problems.append(
-                "не задан cap_drop: [ALL] — контейнер получает capabilities Docker по умолчанию"
-            )
-        if problems:
             findings.append(
                 (
                     f"service:{name}",
-                    "; ".join(problems),
-                    _line(compose, name, "cap_add", "cap_drop"),
+                    f"добавлены опасные capabilities: {', '.join(bad)}",
+                    _line(compose, name, "cap_add"),
                 )
             )
     return findings
 
 
 def _env_items(env: object) -> list[tuple[str, str]]:
+    _guard_graph(env)
     items: list[tuple[str, str]] = []
     if isinstance(env, dict):
         for k, v in env.items():
+            if not _scalar(k) or not _scalar(v):
+                raise ValueError("unsupported Compose shape")
             items.append((str(k), "" if v is None else str(v)))
     elif isinstance(env, list):
         for entry in env:
+            if not isinstance(entry, str):
+                raise ValueError("unsupported Compose shape")
             if isinstance(entry, str) and "=" in entry:
                 k, v = entry.split("=", 1)
                 items.append((k, v))
+    elif env is not None:
+        raise ValueError("unsupported Compose shape")
     return items
 
 
@@ -148,7 +225,7 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
             continue
         for key, value in _env_items(svc.get("environment")):
             if key.upper().endswith(("_FILE", "_FILENAME")):
-                # *_FILE по соглашению docker secrets содержит путь к файлу с секретом
+                # docker secrets convention: значение — это путь, а не сам секрет
                 continue
             if not value or not SECRET_KEY_RE.search(key):
                 continue
@@ -156,9 +233,10 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
             if default is not None:
                 if not default.group(1).strip():
                     continue
-                detail = f"переменная {key} подставляет секрет по умолчанию: {value}"
+                detail = f"переменная {key} подставляет непустой секрет по умолчанию"
             elif ENV_SUBSTITUTION_RE.match(value):
-                # $VAR, ${VAR}: значение приходит извне.
+                # Настоящая подстановка ($VAR, ${VAR}) — значение приходит
+                # извне и в файле его нет.
                 continue
             else:
                 # '$$ecret' — экранированный литерал, а не подстановка.
@@ -168,9 +246,10 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
 
 
 def _port_is_exposed(entry: object) -> tuple[bool, list[str]]:
-    """(публикуется ли на всех интерфейсах, порты контейнера).
+    """Возвращает (публикуется_на_всех_интерфейсах, список container-портов).
 
-    Диапазоны вида '5432-5433:5432-5433' раскрываются.
+    Портов может быть несколько: '5432-5433:5432-5433' — валидная запись
+    диапазона, и каждый порт из него публикуется по-настоящему.
     """
     if isinstance(entry, dict):
         target = str(entry.get("target", ""))
@@ -315,22 +394,13 @@ def check_no_read_only(compose: dict) -> CheckResults:
     return findings
 
 
-def _no_new_privileges_enabled(option: object) -> bool:
-    """'no-new-privileges', ':true' или '=true'; ':false' опцию выключает."""
-    text = str(option).strip().lower().replace("=", ":")
-    if not text.startswith("no-new-privileges"):
-        return False
-    value = text[len("no-new-privileges") :].lstrip(":").strip()
-    return value in ("", "true", "1")
-
-
 def check_missing_no_new_privileges(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
         sec_opt = as_list(svc.get("security_opt"))
-        if not any(_no_new_privileges_enabled(opt) for opt in sec_opt):
+        if not any("no-new-privileges" in str(opt) for opt in sec_opt):
             findings.append(
                 (
                     f"service:{name}",
@@ -363,36 +433,21 @@ def check_missing_resource_limits(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
+        has_legacy_limits = "mem_limit" in svc or "cpus" in svc
         deploy = svc.get("deploy")
-        resources = deploy.get("resources") if isinstance(deploy, dict) else None
-        limits = resources.get("limits") if isinstance(resources, dict) else None
-        limits = limits if isinstance(limits, dict) else {}
-        missing = []
-        if "mem_limit" not in svc and "memory" not in limits:
-            missing.append("памяти (mem_limit или deploy.resources.limits.memory)")
-        if not {"cpus", "cpu_quota"} & set(svc) and "cpus" not in limits:
-            missing.append("CPU (cpus или deploy.resources.limits.cpus)")
-        if missing:
+        has_deploy_limits = bool(
+            isinstance(deploy, dict) and (deploy.get("resources") or {}).get("limits")
+        )
+        if not has_legacy_limits and not has_deploy_limits:
             findings.append(
                 (
                     f"service:{name}",
-                    f"не задано ограничение {' и '.join(missing)} — "
-                    "один контейнер может исчерпать ресурсы хоста",
+                    "не заданы ограничения ресурсов (mem_limit/cpus или "
+                    "deploy.resources.limits) — один контейнер может исчерпать ресурсы хоста",
                     _line(compose, name, "deploy", "mem_limit", "cpus"),
                 )
             )
     return findings
-
-
-def _healthcheck_disabled(healthcheck: object) -> bool:
-    """disable: true или test: ["NONE"] отключают проверку, заданную в образе."""
-    if not isinstance(healthcheck, dict):
-        return False
-    if healthcheck.get("disable"):
-        return True
-    test = healthcheck.get("test")
-    first = test[0] if isinstance(test, list) and test else test
-    return str(first).strip().upper() == "NONE"
 
 
 def check_missing_healthcheck(compose: dict) -> CheckResults:
@@ -401,7 +456,7 @@ def check_missing_healthcheck(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         healthcheck = svc.get("healthcheck")
-        if not healthcheck or _healthcheck_disabled(healthcheck):
+        if not healthcheck or (isinstance(healthcheck, dict) and healthcheck.get("disable")):
             findings.append(
                 (
                     f"service:{name}",
@@ -419,45 +474,16 @@ def check_debug_mode_enabled(compose: dict) -> CheckResults:
             continue
         for key, value in _env_items(svc.get("environment")):
             if DEBUG_KEY_RE.search(key) and value.strip().lower() in DEBUG_TRUTHY:
+                label = key if SECRET_KEY_RE.search(key) else f"{key}={value}"
                 findings.append(
                     (
                         f"service:{name}",
-                        f"{key}={value} — режим отладки включён, приложение может "
+                        f"{label} — режим отладки включён, приложение может "
                         "раскрывать трассировки и внутренние данные",
                         _line(compose, name, "environment"),
                     )
                 )
     return findings
-
-
-def _is_sensitive_host_path(path: str) -> bool:
-    """Путь из SENSITIVE_HOST_MOUNTS или вложенный в него (/etc/ssl, /proc/1)."""
-    if not path.startswith("/") or path.endswith("docker.sock"):
-        return False  # docker.sock проверяет C008
-    normalized = path.rstrip("/") or "/"
-    if normalized == "/":
-        return True
-    return any(
-        normalized == base or normalized.startswith(base + "/")
-        for base in SENSITIVE_HOST_MOUNTS
-        if base != "/"
-    )
-
-
-def _volume_host_paths(compose: dict) -> list[tuple[str, str]]:
-    """(том, путь хоста) из driver_opts томов верхнего уровня: device, mountpoint."""
-    volumes = (compose or {}).get("volumes") or {}
-    if not isinstance(volumes, dict):
-        return []
-    found = []
-    for name, spec in volumes.items():
-        opts = spec.get("driver_opts") if isinstance(spec, dict) else None
-        if not isinstance(opts, dict):
-            continue
-        for key in ("device", "mountpoint"):
-            if opts.get(key):
-                found.append((str(name), str(opts[key])))
-    return found
 
 
 def check_sensitive_host_mount(compose: dict) -> CheckResults:
@@ -468,11 +494,9 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
         for vol in as_list(svc.get("volumes")):
             if isinstance(vol, dict):
                 source_path = str(vol.get("source", ""))
-            elif ":" not in str(vol):
-                continue  # '- /data' — анонимный том, каталог хоста не монтируется
             else:
                 source_path = str(vol).split(":")[0]
-            if _is_sensitive_host_path(source_path):
+            if source_path in SENSITIVE_HOST_MOUNTS:
                 findings.append(
                     (
                         f"service:{name}",
@@ -480,18 +504,6 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
                         _line(compose, name, "volumes"),
                     )
                 )
-    # Том верхнего уровня, привязанный к каталогу хоста, опасен для любого
-    # сервиса, который его подключит, поэтому находка относится к тому.
-    volume_line = getattr(compose, "volume_line", None)
-    for volume, path in _volume_host_paths(compose):
-        if _is_sensitive_host_path(path):
-            findings.append(
-                (
-                    f"volume:{volume}",
-                    f"том {volume} привязан к чувствительному пути хоста '{path}'",
-                    volume_line(volume) if callable(volume_line) else None,
-                )
-            )
     return findings
 
 
@@ -508,33 +520,15 @@ def check_flat_network(compose: dict) -> CheckResults:
     ]
 
 
-# Драйверы, которые оставляют журнал на самом хосте.
-LOCAL_LOG_DRIVERS = frozenset({"json-file", "local", "none"})
-
-
-def check_logs_not_centralized(compose: dict) -> CheckResults:
-    findings = []
-    for name, svc in _services(compose).items():
-        if not isinstance(svc, dict):
-            continue
-        logging = svc.get("logging")
-        driver = logging.get("driver") if isinstance(logging, dict) else None
-        driver = str(driver or "json-file").strip().lower()
-        if driver in LOCAL_LOG_DRIVERS:
-            detail = (
-                "logging.driver: none — журнал контейнера не ведётся"
-                if driver == "none"
-                else f"журнал контейнера остаётся на хосте (драйвер {driver})"
-            )
-            findings.append((f"service:{name}", detail, _line(compose, name, "logging")))
-    return findings
-
-
 ComposeCheck = Callable[[dict], CheckResults]
 
 
 def _service_scope(check: ComposeCheck) -> ComposeCheck:
-    """Добавляет строки для подавления: заголовок сервиса, директива, её элементы."""
+    """Прикладывает к находке строки, на которых её можно подавить.
+
+    Комментарий пишут в трёх местах: на заголовке сервиса, у директивы и
+    у конкретного элемента внутри неё. Работать должны все три.
+    """
 
     @wraps(check)
     def wrapped(compose: dict) -> CheckResults:
@@ -567,5 +561,4 @@ REGISTRY = {
     "C014": _service_scope(check_debug_mode_enabled),
     "C015": _service_scope(check_sensitive_host_mount),
     "C016": _service_scope(check_flat_network),
-    "C017": _service_scope(check_logs_not_centralized),
 }
