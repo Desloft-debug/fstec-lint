@@ -6,6 +6,32 @@ on:
   pull_request:
 
 jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install build
+      - run: python -m build
+      - run: |
+          python -m venv "$RUNNER_TEMP/wheel-env"
+          "$RUNNER_TEMP/wheel-env/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          wheel-env/bin/python -m pip check
+          wheel-env/bin/fstec-lint --version
+          wheel-env/bin/fstec-lint --help
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          path: examples/hardened-stack
+          fail-on: high
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -45,7 +71,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]" -c constraints.txt
-      - run: pytest -v --cov=fstec_lint --cov-report=term-missing
+      - run: pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 
   self-scan:
     runs-on: ubuntu-latest

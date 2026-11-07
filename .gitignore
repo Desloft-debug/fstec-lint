@@ -13,5 +13,8 @@ fstec-lint-report.*
 .coverage.*
 htmlcov/
 
-# Наборы для benchmarks/run.sh
-benchmarks/.corpora/
+.agent-runs/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+fstec-lint-1.1.0/
