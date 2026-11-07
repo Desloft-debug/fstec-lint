@@ -1,6 +1,15 @@
-"""Проверки postgresql.conf и pg_hba.conf."""
+"""Проверки postgresql.conf и pg_hba.conf.
+
+Первые две функции работают со списком записей из parse_pg_hba,
+остальные — со словарём параметров из parse_postgresql_conf.
+"""
 
 from __future__ import annotations
+
+import hashlib
+import json
+from collections import defaultdict
+from collections.abc import Iterator
 
 from .base import CheckResults, config_line
 
@@ -16,14 +25,29 @@ OPEN_ADDRESSES = {
 }
 
 
+def _hba_locations(records: list[dict]) -> Iterator[tuple[dict, str]]:
+    """Identify records without including options, raw input, or line numbers.
+
+    Occurrences distinguish records with identical structural fields. Their order
+    matters when identical records are inserted, deleted, or rearranged.
+    """
+    occurrences: dict[str, int] = defaultdict(int)
+    for rec in records:
+        fields = [rec.get(key) for key in ("type", "database", "user", "address", "method")]
+        encoded = json.dumps(fields, ensure_ascii=True, separators=(",", ":"))
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        occurrences[digest] += 1
+        yield rec, f"pg_hba:v2:{digest}:{occurrences[digest]}"
+
+
 def check_trust_or_md5_auth(records: list[dict]) -> CheckResults:
     findings = []
-    for rec in records:
+    for rec, location in _hba_locations(records):
         method = (rec.get("method") or "").lower()
         if method == "trust":
             findings.append(
                 (
-                    f"pg_hba: {rec['raw']}",
+                    location,
                     "метод аутентификации 'trust' разрешает подключение без пароля",
                     rec.get("line"),
                 )
@@ -31,7 +55,7 @@ def check_trust_or_md5_auth(records: list[dict]) -> CheckResults:
         elif method == "md5":
             findings.append(
                 (
-                    f"pg_hba: {rec['raw']}",
+                    location,
                     "метод аутентификации 'md5' устарел, рекомендуется scram-sha-256",
                     rec.get("line"),
                 )
@@ -41,12 +65,12 @@ def check_trust_or_md5_auth(records: list[dict]) -> CheckResults:
 
 def check_open_hba_address(records: list[dict]) -> CheckResults:
     findings = []
-    for rec in records:
+    for rec, location in _hba_locations(records):
         addr = rec.get("address")
         if addr and addr.lower() in OPEN_ADDRESSES:
             findings.append(
                 (
-                    f"pg_hba: {rec['raw']}",
+                    location,
                     f"подключение разрешено с адреса '{addr}' без ограничения по сети",
                     rec.get("line"),
                 )
@@ -136,7 +160,8 @@ def check_missing_statement_timeout(settings: dict) -> CheckResults:
     return []
 
 
-# pg_hba разбирается в список записей, postgresql.conf — в словарь.
+# Два реестра, а не один: pg_hba и postgresql.conf парсятся в разную
+# форму (список записей vs словарь), так надёжнее.
 PG_HBA_REGISTRY = {
     "P001": check_trust_or_md5_auth,
     "P002": check_open_hba_address,

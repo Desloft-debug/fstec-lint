@@ -6,9 +6,9 @@ from pathlib import Path
 
 from . import __version__
 from . import baseline as baseline_module
-from .engine import filter_by_uz, filter_rules, load_rules, scan, unknown_patterns
+from .engine import RulesError, filter_by_uz, filter_rules, load_rules, scan, unknown_patterns
 from .models import Rule, Severity
-from .reporters import docx, html, json_reporter, passport, rules_catalog, sarif, text
+from .reporters import html, json_reporter, passport, rules_catalog, sarif, text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,8 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fstec-lint",
         description=(
             "Статический аудит инфраструктуры (Docker Compose, Dockerfile, "
-            "PostgreSQL, sshd_config, systemd, login.defs, pwquality, rsyslog, "
-            "nginx, .env) с привязкой находок к мерам "
+            "PostgreSQL, sshd_config, systemd) с привязкой находок к мерам "
             "защиты ФСТЭК (приказ №21 / приказ №117, заменивший №17)."
         ),
     )
@@ -30,12 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f",
         "--format",
-        choices=["text", "json", "html", "sarif", "passport", "docx"],
+        choices=["text", "json", "html", "sarif", "passport"],
         default="text",
-        help=(
-            "формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015, "
-            "docx — отчёт по ГОСТ 7.32-2017 с паспортами в приложении (нужен --output)"
-        ),
+        help=("формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015 (приложение А)"),
     )
     parser.add_argument("-o", "--output", help="файл для сохранения отчёта (по умолчанию — stdout)")
     parser.add_argument(
@@ -77,8 +73,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="GLOB",
         help=(
             "не сканировать файлы и каталоги, подходящие под glob "
-            "(можно повторять). Служебные каталоги вроде .git, node_modules "
-            "и .venv исключены всегда"
+            "(можно повторять). При обходе исключаются служебные каталоги вроде "
+            ".git, node_modules и .venv; явно указанный файл не исключается"
+        ),
+    )
+    parser.add_argument(
+        "--production-only",
+        action="store_true",
+        help=(
+            "пропустить вложенные каталоги test/tests, fixture/fixtures, "
+            "example/examples, demo/demos"
         ),
     )
     parser.add_argument(
@@ -111,7 +115,12 @@ def _rule_patterns(values: list[str]) -> list[str]:
 
 
 def _report_unknown(rules: list[Rule], patterns: list[str], option: str) -> bool:
-    """Печатает шаблоны правил, не подошедшие ни к одному правилу. True, если такие были."""
+    """Печатает нераспознанные шаблоны правил. True, если такие были.
+
+    Опечатка в --select раньше давала «нарушений не найдено» и код 0:
+    прогон, не проверивший ничего, выглядел как успешный аудит. Теперь
+    это код 2 — ошибка вызова.
+    """
     unknown = unknown_patterns(rules, patterns)
     for pattern in unknown:
         print(
@@ -126,7 +135,12 @@ class UsageError(Exception):
 
 
 def _write(output: str, destination: str | None) -> None:
-    """Пишет отчёт в файл или в stdout. Ошибка записи — код 2."""
+    """Пишет отчёт в файл или в stdout.
+
+    Ошибка записи — это ошибка вызова (код 2), а не находка: раньше
+    несуществующий каталог в --output давал трейсбек и код 1, то есть
+    ровно тот же код, что «найдены нарушения выше порога».
+    """
     if not destination:
         print(output)
         return
@@ -161,15 +175,19 @@ def _run(argv: list[str] | None) -> int:
             _write(rules_catalog.render_text(rules), args.output)
         return 0
 
-    if args.format == "docx" and not args.output:
-        raise UsageError("для --format docx укажите файл через --output")
-
-    root = Path(args.path).resolve()
+    root = Path(args.path).absolute()
     if not root.exists():
         print(f"fstec-lint: путь не найден: {root}", file=sys.stderr)
         return 2
 
-    result = scan(root, exclude=args.exclude, select=select, ignore=ignore, uz=args.uz)
+    result = scan(
+        root,
+        exclude=args.exclude,
+        select=select,
+        ignore=ignore,
+        uz=args.uz,
+        production_only=args.production_only,
+    )
     findings = result.findings
 
     for error in result.errors:
@@ -205,14 +223,7 @@ def _run(argv: list[str] | None) -> int:
         if suppressed:
             print(f"fstec-lint: подавлено baseline-ом: {suppressed}", file=sys.stderr)
 
-    if args.format == "docx":
-        applied = filter_by_uz(filter_rules(all_rules, select, ignore), args.uz)
-        try:
-            Path(args.output).write_bytes(docx.render(findings, root.name, len(applied)))
-        except OSError as exc:
-            raise UsageError(f"не удалось записать {args.output}: {exc.strerror or exc}") from exc
-        output = None
-    elif args.format == "json":
+    if args.format == "json":
         output = json_reporter.render(findings)
     elif args.format == "html":
         output = html.render(findings, title=f"fstec-lint report — {root.name}")
@@ -223,8 +234,7 @@ def _run(argv: list[str] | None) -> int:
     else:
         output = text.render(findings)
 
-    if output is not None:
-        _write(output, args.output)
+    _write(output, args.output)
 
     if result.errors:
         print(
@@ -232,7 +242,11 @@ def _run(argv: list[str] | None) -> int:
             file=sys.stderr,
         )
 
-    # Код 1 важнее кода 3: нарушение не должно теряться из-за нечитаемого файла.
+    # Порог считается ПЕРЕД кодом 3. Код 3 отдельно от 1 нужен, чтобы
+    # «инструмент не прочитал часть файлов» не путали с «нарушения
+    # найдены», но приоритет у нарушения: прогон с одним битым файлом и
+    # critical-находкой возвращал 3, и гейт, различающий эти коды, читал
+    # его как чистый.
     if args.fail_on != "none":
         threshold = Severity.from_str(args.fail_on)
         if any(finding.rule.severity >= threshold for finding in findings):
@@ -244,7 +258,7 @@ def _run(argv: list[str] | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _run(argv)
-    except UsageError as exc:
+    except (UsageError, RulesError) as exc:
         print(f"fstec-lint: {exc}", file=sys.stderr)
         return 2
 

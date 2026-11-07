@@ -17,9 +17,10 @@ MAX_LOCATION_ARGS = 60
 
 @dataclass
 class Stage:
-    """Стадия сборки: FROM и всё до следующего FROM.
+    """Одна стадия сборки: FROM и всё, что до следующего FROM.
 
-    Инструкции до первого FROM попадают в псевдостадию с is_from=False.
+    Инструкции до первого FROM (ARG там легален) складываются в
+    псевдостадию с is_from=False, чтобы не выпадать из проверок.
     """
 
     index: int
@@ -37,7 +38,11 @@ class Stage:
 
 
 def _from_ref(args: str) -> tuple[str, str | None]:
-    """'--platform=$X golang:1.23 AS builder' -> ('golang:1.23', 'builder')."""
+    """'--platform=$X golang:1.23 AS builder' -> ('golang:1.23', 'builder').
+
+    Флаги вида --platform обязательно отбрасываются: иначе за имя образа
+    принимается сам флаг и проверка закрепления версии врёт.
+    """
     tokens = [token for token in args.split() if not token.startswith("--")]
     if not tokens:
         return "", None
@@ -93,17 +98,29 @@ def _stage_by_name(stages: list[Stage], name: str) -> Stage | None:
 
 
 def _loc(stage: Stage, suffix: str) -> str:
-    """Адрес находки без номера строки (строка хранится отдельно в Finding)."""
+    """Адрес находки без номера строки: он живёт в отдельном поле Finding.
+
+    Номер строки в location делал отпечаток для baseline нестабильным —
+    вставка строки в начало файла обнуляла весь принятый долг.
+    """
     return f"{stage.label}: {suffix}"
 
 
 def _normalize(args: str) -> str:
-    """Аргументы в одну строку (тело heredoc многострочное)."""
+    """Аргументы в одну строку: тело heredoc содержит переводы строк.
+
+    Без этого многострочный RUN уезжал в поле detail как есть и рвал
+    построчный текстовый отчёт (и строку в JSON) на несколько.
+    """
     return " ".join(args.split())
 
 
 def _short(args: str) -> str:
-    """Короткий адрес находки; при усечении добавляется хеш, чтобы адреса не совпадали."""
+    """Короткий адрес находки; при усечении дополняется хешом.
+
+    Усечённый адрес входит в отпечаток baseline, и две длинные команды с
+    общим началом получали один и тот же — одна запись глушила обе.
+    """
     args = _normalize(args)
     if len(args) <= MAX_LOCATION_ARGS:
         return args
@@ -111,8 +128,17 @@ def _short(args: str) -> str:
     return f"{args[:MAX_LOCATION_ARGS]}…#{digest}"
 
 
+def _private_location(args: str) -> str:
+    """Identify an instruction without exposing its potentially secret arguments."""
+    return hashlib.sha256(_normalize(args).encode("utf-8")).hexdigest()
+
+
 def _effective_user(stage: Stage, stages: list[Stage], seen: set[int] | None = None) -> str | None:
-    """Пользователь стадии с учётом наследования от локальной стадии в FROM."""
+    """Пользователь, от которого стартует стадия, с учётом наследования.
+
+    Если в стадии нет USER, но она собрана FROM другой локальной стадии —
+    пользователь наследуется оттуда, и правило не должно ругаться.
+    """
     seen = seen or set()
     if stage.index in seen:
         return None
@@ -166,9 +192,8 @@ def check_add_remote_url(instructions: list[dict]) -> CheckResults:
             if first_arg.startswith(("http://", "https://")):
                 findings.append(
                     (
-                        _loc(stage, f"ADD {_short(inst['args'])}"),
-                        f"ADD {_normalize(inst['args'])} — загрузка по URL "
-                        "без проверки контрольной суммы",
+                        _loc(stage, f"ADD sha256:{_private_location(inst['args'])}"),
+                        "ADD — загрузка по URL без проверки контрольной суммы",
                         inst["line"],
                     )
                 )
@@ -186,8 +211,7 @@ def check_secret_build_arg(instructions: list[dict]) -> CheckResults:
                 findings.append(
                     (
                         _loc(stage, f"ARG {name}"),
-                        f"ARG {inst['args']} — значение попадает в историю слоёв "
-                        "образа (docker history)",
+                        f"ARG {name} — значение попадает в историю слоёв образа (docker history)",
                         inst["line"],
                     )
                 )
@@ -199,22 +223,18 @@ def check_latest_base_image(instructions: list[dict]) -> CheckResults:
     build_stages = _build_stages(_stages(instructions))
     for position, stage in enumerate(build_stages):
         image = stage.parent
-        # FROM builder — предыдущая стадия, закреплять нечего.
+        # FROM builder — ссылка на предыдущую стадию, а не на внешний образ:
+        # закреплять там нечего, это не находка.
         if _stage_by_name(build_stages[:position], image) is not None:
             continue
         if not image or "@sha256:" in image or image == "scratch":
             continue
         last_segment = image.split("/")[-1]
         if ":" not in last_segment or last_segment.endswith(":latest"):
-            reason = (
-                "образ задан переменной без значения в ARG до первого FROM и не закреплён"
-                if "$" in image
-                else "базовый образ не закреплён по версии/digest"
-            )
             findings.append(
                 (
                     _loc(stage, f"FROM {image}"),
-                    f"FROM {image} — {reason}",
+                    f"FROM {image} — базовый образ не закреплён по версии/digest",
                     stage.from_line,
                 )
             )
@@ -230,9 +250,8 @@ def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
             if PIPE_TO_SHELL_RE.search(inst["args"]):
                 findings.append(
                     (
-                        _loc(stage, f"RUN {_short(inst['args'])}"),
-                        f"RUN {_short(inst['args'])} — вывод curl/wget передаётся "
-                        "напрямую в shell без проверки",
+                        _loc(stage, f"RUN sha256:{_private_location(inst['args'])}"),
+                        "RUN — вывод curl/wget передаётся напрямую в shell без проверки",
                         inst["line"],
                     )
                 )

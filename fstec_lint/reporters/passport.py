@@ -5,8 +5,14 @@
 19.08.2015 N 1180-ст) задаёт структуру описания уязвимости и форму
 паспорта (приложение А). Приказ ФСТЭК N 117 ссылается на этот стандарт.
 
-Элементы, которые по конфигурации определить нельзя (версия ПО,
-платформа, язык программирования), помечаются «не определяется».
+Формат нужен, чтобы результат прогона прикладывался к материалам оценки
+как есть, а не переписывался руками. Пункт 20 и) Методики оценки Кзи
+называет исходными данными «результаты работы инструментальных средств
+оценки (анализа) защищённости»; паспорт — та форма, в которой их ждут.
+
+Элементы, недоступные статическому анализу (версия ПО, аппаратная
+платформа, язык программирования), помечаются отметкой «не
+определяется». Прочерк в паспорте лучше правдоподобной догадки.
 """
 
 from __future__ import annotations
@@ -18,7 +24,8 @@ from ..models import Finding, Severity
 
 NOT_DETERMINED = "не определяется статическим анализом конфигурации"
 
-# П. 5.2.18: четыре степени опасности, как и в инструменте.
+# ГОСТ Р 56545-2015, п. 5.2.18: степень опасности принимает одно из
+# четырёх значений. Шкала инструмента совпадает с ней один в один.
 SEVERITY_LABEL = {
     Severity.CRITICAL: "критический уровень опасности",
     Severity.HIGH: "высокий уровень опасности",
@@ -26,7 +33,8 @@ SEVERITY_LABEL = {
     Severity.LOW: "низкий уровень опасности",
 }
 
-# Класс (п. 5.2.6) и место возникновения (п. 5.2.12) по ГОСТ Р 56546.
+# Класс уязвимости (п. 5.2.6) и место возникновения (п. 5.2.12) —
+# по ГОСТ Р 56546, пункты 5.1 и 5.3.
 VULNERABILITY_CLASS = vulnclass.CONFIGURATION_CLASS
 VULNERABILITY_LOCATION = vulnclass.SYSTEM_SOFTWARE
 
@@ -37,22 +45,20 @@ TARGET_SOFTWARE = {
     "pg_hba": "PostgreSQL (файл управления доступом клиентов)",
     "sshd_config": "OpenSSH, серверная часть (sshd)",
     "systemd_unit": "systemd (файл модуля службы)",
-    "login_defs": "shadow-utils (параметры учётных записей, login.defs)",
-    "pwquality": "libpwquality (требования к паролям, pwquality.conf)",
-    "rsyslog": "rsyslog (служба регистрации событий)",
-    "nginx": "nginx (веб-сервер)",
-    "useradd_defaults": "shadow-utils (параметры новых учётных записей, useradd)",
-    "postfix_main": "Postfix (почтовый сервер)",
 }
 
 
-def identifier(index: int, today: date) -> str:
+def _identifier(finding: Finding, index: int, today: date) -> str:
     """Идентификатор уязвимости по п. 5.2.3: код БД, год, порядковый номер."""
     return f"FLINT-{today.year}-{index:04d}"
 
 
 def _detection_rule(finding: Finding) -> str:
-    """Способ (правило) обнаружения, п. 5.2.16."""
+    """Способ (правило) обнаружения по п. 5.2.16.
+
+    Формализованное правило у инструмента есть по построению — это сам
+    идентификатор проверки и предикат, который она вычисляет.
+    """
     return (
         f"Правило {finding.rule.id} инструмента fstec-lint. "
         f"Предикат: {finding.rule.description} "
@@ -69,15 +75,14 @@ def _service_port(finding: Finding) -> str:
     return NOT_DETERMINED
 
 
-def passport_rows(finding: Finding, index: int, today: date) -> list[tuple[str, str]]:
-    """Элементы паспорта в порядке приложения А ГОСТ Р 56545-2015."""
+def _passport(finding: Finding, index: int, today: date) -> list[str]:
     rule = finding.rule
     where = finding.relative_file()
     if finding.line is not None:
         where = f"{where}:{finding.line}"
     rows = [
         ("Наименование уязвимости", f"{rule.title} ({finding.location})"),
-        ("Идентификатор уязвимости", identifier(index, today)),
+        ("Идентификатор уязвимости", _identifier(finding, index, today)),
         ("Идентификаторы других систем описаний уязвимостей", NOT_DETERMINED),
         ("Краткое описание уязвимости", rule.description),
         ("Класс уязвимости", VULNERABILITY_CLASS),
@@ -107,11 +112,6 @@ def passport_rows(finding: Finding, index: int, today: date) -> list[tuple[str, 
             f"Мероприятие: {rule.activity}. Факт: {finding.detail}",
         ),
     ]
-    return rows
-
-
-def _passport(finding: Finding, index: int, today: date) -> list[str]:
-    rows = passport_rows(finding, index, today)
     width = max(len(name) for name, _ in rows)
     out = [f"Паспорт уязвимости № {index} (ГОСТ Р 56545-2015, приложение А)", ""]
     out += [f"{name.ljust(width)} | {value}" for name, value in rows]

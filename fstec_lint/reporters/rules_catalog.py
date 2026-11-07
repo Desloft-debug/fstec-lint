@@ -1,7 +1,6 @@
-"""Каталог правил и затронутые ими пункты приказа N 117.
-
-Перечень прикладывают к документам по оценке соответствия.
-"""
+"""Вывод каталога правил: что вообще умеет проверять инструмент и какие
+группы мер ФСТЭК он затрагивает. Полезно, когда перечень проверок нужно
+приложить к документам по оценке соответствия."""
 
 from __future__ import annotations
 
@@ -19,12 +18,6 @@ TARGET_LABELS = {
     "pg_hba": "pg_hba.conf",
     "sshd_config": "sshd_config",
     "systemd_unit": "*.service (systemd)",
-    "login_defs": "login.defs",
-    "pwquality": "pwquality.conf",
-    "rsyslog": "rsyslog.conf",
-    "nginx": "nginx.conf и файлы сайтов",
-    "useradd_defaults": "/etc/default/useradd",
-    "postfix_main": "main.cf (Postfix)",
 }
 
 SEVERITY_LABEL = {
@@ -45,7 +38,12 @@ CLAUSE_LABELS = {
 
 
 def measure_groups(rule: Rule) -> list[str]:
-    """Пункты приказа N 117, затронутые правилом."""
+    """Пункты приказа N 117, затронутые правилом.
+
+    Раньше здесь вырезались коды групп вида ЗСВ/УПД из приказа N 17. В
+    приказе N 117 таких кодов нет, поэтому покрытие считается по его
+    пунктам — так его можно проверить по тексту приказа, а не по памяти.
+    """
     return [f"п. {number} {letter})" for number, letter in _CLAUSE_RE.findall(rule.measure)] or [
         rule.measure
     ]

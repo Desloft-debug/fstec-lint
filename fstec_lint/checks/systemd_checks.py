@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from .base import CheckResults, config_line, is_root_user
 
-# Все написания, которые systemd считает истиной.
+# systemd считает истиной любое из этих написаний, не только 'true'.
+# Проверять одно из них — значит ругаться на корректно закалённый юнит.
 TRUE_VALUES = frozenset({"true", "yes", "on", "1"})
 
 
@@ -19,7 +20,9 @@ def _is_true(service: dict, key: str) -> bool:
 
 def check_runs_as_root(unit: dict) -> CheckResults:
     service = _service(unit)
-    # DynamicUser=yes: systemd выделяет непривилегированный uid.
+    # DynamicUser=yes — systemd сам выделяет сервису временный
+    # непривилегированный uid, и статический User при этом не нужен:
+    # такой юнит от root не работает.
     if _is_true(service, "DynamicUser"):
         return []
     user = service.get("User")
@@ -31,7 +34,9 @@ def check_runs_as_root(unit: dict) -> CheckResults:
                 config_line(service, "User"),
             )
         ]
-    # 'User=0' и 'User=ROOT' тоже root.
+    # 'User=0' и 'User=ROOT' — тот же root: раньше правило смотрело на
+    # точное совпадение со строкой 'root' и обе формы пропускало, хотя
+    # C001 и D001 про тот же предмет их ловили.
     if is_root_user(user):
         return [
             (
@@ -87,7 +92,8 @@ def check_private_tmp(unit: dict) -> CheckResults:
 
 def check_protect_home(unit: dict) -> CheckResults:
     service = _service(unit)
-    # tmpfs: поверх /home монтируется пустая tmpfs.
+    # tmpfs — тоже защита: поверх /home монтируется пустая tmpfs,
+    # домашние каталоги сервису не видны.
     value = str(service.get("ProtectHome", "")).strip().lower()
     if value not in ("true", "yes", "on", "1", "read-only", "tmpfs"):
         return [
