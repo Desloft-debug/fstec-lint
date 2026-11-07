@@ -60,7 +60,7 @@ jobs:
           pip install pip-audit
           pip-audit --strict -r constraints.txt
 
-    test:
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
