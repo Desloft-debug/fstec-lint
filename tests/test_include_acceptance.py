@@ -119,15 +119,23 @@ def test_d006_final_stage_and_last_instruction(tmp_path, body, missing):
     assert not result.errors and bool(result.findings) is missing
 
 
-def test_sarif_unicode_path_oracle_roundtrip(tmp_path):
+@pytest.mark.parametrize("inside_cwd", [True, False])
+def test_sarif_unicode_path_oracle_roundtrip(tmp_path, monkeypatch, inside_cwd):
     from urllib.parse import unquote, urlsplit
 
     from integration_helpers import displayed_uri
 
     path = tmp_path / "Проверка & имя.conf"
+    cwd = tmp_path if inside_cwd else tmp_path / "work"
+    cwd.mkdir(exist_ok=True)
+    monkeypatch.chdir(cwd)
     uri = displayed_uri(path)
     assert " " not in uri and "&" not in uri
-    decoded = unquote(urlsplit(uri).path)
-    if Path().anchor == "" and len(decoded) > 2 and decoded[2] == ":":
+    parsed = urlsplit(uri)
+    assert parsed.scheme == ("" if inside_cwd else "file")
+    decoded = unquote(parsed.path)
+    if parsed.scheme == "file" and len(decoded) > 2 and decoded[2] == ":":
         decoded = decoded[1:]
-    assert Path(decoded) == path
+    restored = Path(decoded)
+    assert restored.is_absolute() is (not inside_cwd)
+    assert restored.resolve() == path.resolve()
