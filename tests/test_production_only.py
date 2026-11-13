@@ -1,4 +1,4 @@
-"""Observable directory-filter contract from S01/execution-contract.md.
+"""Directory-filter behavior through the public interface.
 
 Synthetic configurations use known findings; no discovery implementation is
 used to compute expected paths. Default and opt-in scans share the same tree.
@@ -258,17 +258,17 @@ def test_production_only_exit_codes(tmp_path, capsys, case, expected):
     capsys.readouterr()
 
 
-S07_SENTINEL = "S07_SYNTHETIC_PRIVATE_d184"
-S07_FORMATS = ("text", "json", "html", "sarif", "passport")
+TEST_SENTINEL = "TEST_SYNTHETIC_PRIVATE_d184"
+TEST_FORMATS = ("text", "json", "html", "sarif", "passport")
 
 
-@pytest.mark.parametrize("fmt", S07_FORMATS)
+@pytest.mark.parametrize("fmt", TEST_FORMATS)
 @pytest.mark.parametrize("kind", ["syntax", "constructor"])
-def test_s07_yaml_diagnostic_preserves_position_without_source(tmp_path, capsys, fmt, kind):
+def test_yaml_diagnostic_preserves_position_without_source(tmp_path, capsys, fmt, kind):
     text = (
-        'services:\n  web:\n    image: "' + S07_SENTINEL + "\n"
+        'services:\n  web:\n    image: "' + TEST_SENTINEL + "\n"
         if kind == "syntax"
-        else "services:\n  web: !" + S07_SENTINEL + "\n    image: nginx\n"
+        else "services:\n  web: !" + TEST_SENTINEL + "\n    image: nginx\n"
     )
     target = _write(tmp_path / "compose.yaml", text)
     # PyYAML itself is the independent position/category oracle; no scanner
@@ -283,61 +283,61 @@ def test_s07_yaml_diagnostic_preserves_position_without_source(tmp_path, capsys,
     assert Path(error.file) == target
     assert type(raw.value).__name__ in error.message
     assert f"строка {mark.line + 1}, столбец {mark.column + 1}" in error.message
-    assert S07_SENTINEL not in error.message
+    assert TEST_SENTINEL not in error.message
     assert main([str(tmp_path), "--select", "C002", "--format", fmt, "--fail-on", "none"]) == 3
     captured = capsys.readouterr()
-    assert S07_SENTINEL not in captured.out + captured.err
+    assert TEST_SENTINEL not in captured.out + captured.err
     assert "Traceback" not in captured.err
 
 
-def _s07_exception(kind):
+def _exception(kind):
     if kind == "unicode":
-        return UnicodeDecodeError("utf-8", S07_SENTINEL.encode(), 0, 1, S07_SENTINEL)
+        return UnicodeDecodeError("utf-8", TEST_SENTINEL.encode(), 0, 1, TEST_SENTINEL)
     if kind == "oserror":
-        return OSError(S07_SENTINEL)
-    return ValueError(S07_SENTINEL + "\ninjected error text")
+        return OSError(TEST_SENTINEL)
+    return ValueError(TEST_SENTINEL + "\ninjected error text")
 
 
-@pytest.mark.parametrize("fmt", S07_FORMATS)
+@pytest.mark.parametrize("fmt", TEST_FORMATS)
 @pytest.mark.parametrize("kind", ["value", "unicode", "oserror"])
-def test_s07_parser_exception_payload_is_not_diagnostic(tmp_path, monkeypatch, capsys, fmt, kind):
+def test_parser_exception_payload_is_not_diagnostic(tmp_path, monkeypatch, capsys, fmt, kind):
     target = _write(tmp_path / "compose.yaml")
 
     def failed_parser(_):
-        raise _s07_exception(kind)
+        raise _exception(kind)
 
     monkeypatch.setattr(engine, "parse_compose", failed_parser)
     result = engine.scan(tmp_path, select=["C002"])
     assert not result.findings and len(result.errors) == 1
     assert Path(result.errors[0].file) == target
-    assert type(_s07_exception(kind)).__name__ in result.errors[0].message
-    assert S07_SENTINEL not in result.errors[0].message
+    assert type(_exception(kind)).__name__ in result.errors[0].message
+    assert TEST_SENTINEL not in result.errors[0].message
     assert main([str(tmp_path), "--select", "C002", "--format", fmt, "--fail-on", "none"]) == 3
     captured = capsys.readouterr()
-    assert S07_SENTINEL not in captured.err + captured.out
+    assert TEST_SENTINEL not in captured.err + captured.out
     assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize("fmt", S07_FORMATS)
-def test_s07_real_encoding_error_is_controlled(tmp_path, capsys, fmt):
+@pytest.mark.parametrize("fmt", TEST_FORMATS)
+def test_real_encoding_error_is_controlled(tmp_path, capsys, fmt):
     path = tmp_path / "compose.yaml"
-    path.write_bytes(b"# " + S07_SENTINEL.encode() + b"\nservices: \xff")
+    path.write_bytes(b"# " + TEST_SENTINEL.encode() + b"\nservices: \xff")
     assert main([str(tmp_path), "--select", "C002", "--format", fmt, "--fail-on", "none"]) == 3
     captured = capsys.readouterr()
     assert "UnicodeDecodeError" in captured.err
-    assert S07_SENTINEL not in captured.out + captured.err
+    assert TEST_SENTINEL not in captured.out + captured.err
     assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize("fmt", S07_FORMATS)
+@pytest.mark.parametrize("fmt", TEST_FORMATS)
 @pytest.mark.parametrize("threshold,expected", [("none", 3), ("high", 1)])
-def test_s07_check_error_redaction_preserves_other_findings_and_codes(
+def test_check_error_redaction_preserves_other_findings_and_codes(
     tmp_path, monkeypatch, capsys, fmt, threshold, expected
 ):
     target = _write(tmp_path / "compose.yaml")
 
     def failed_check(_):
-        raise ValueError(S07_SENTINEL)
+        raise ValueError(TEST_SENTINEL)
 
     monkeypatch.setitem(engine.compose_checks.REGISTRY, "C002", failed_check)
     result = engine.scan(tmp_path, select=["C001", "C002"])
@@ -345,19 +345,19 @@ def test_s07_check_error_redaction_preserves_other_findings_and_codes(
     finding = result.findings[0]
     assert (Path(finding.file), finding.line, finding.location) == (target, 2, "service:db")
     assert len(result.errors) == 1 and "C002" in result.errors[0].message
-    assert S07_SENTINEL not in result.errors[0].message
+    assert TEST_SENTINEL not in result.errors[0].message
     assert (
         main([str(tmp_path), "--select", "C001,C002", "--format", fmt, "--fail-on", threshold])
         == expected
     )
     captured = capsys.readouterr()
     assert "C001" in captured.out
-    assert S07_SENTINEL not in captured.out + captured.err
+    assert TEST_SENTINEL not in captured.out + captured.err
     assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize("kind", ["prefix", "suffix", "subclass"])
-def test_s07_legacy_error_lookalike_cannot_echo_payload(tmp_path, monkeypatch, capsys, kind):
+def test_legacy_error_lookalike_cannot_echo_payload(tmp_path, monkeypatch, capsys, kind):
     path = _write(tmp_path / "compose.yaml", "web:\n  image: nginx\n")
     with pytest.raises(ValueError) as actual_legacy:
         parse_compose(path)
@@ -370,20 +370,20 @@ def test_s07_legacy_error_lookalike_cannot_echo_payload(tmp_path, monkeypatch, c
         if kind == "subclass":
             raise LegacyLookalike(known_text)
         raise ValueError(
-            S07_SENTINEL + known_text if kind == "prefix" else known_text + S07_SENTINEL
+            TEST_SENTINEL + known_text if kind == "prefix" else known_text + TEST_SENTINEL
         )
 
     monkeypatch.setattr(engine, "parse_compose", failed_parser)
     assert main([str(tmp_path), "--select", "C002", "--format", "json"]) == 3
     captured = capsys.readouterr()
-    assert S07_SENTINEL not in captured.out + captured.err
+    assert TEST_SENTINEL not in captured.out + captured.err
     assert "docker-compose v1" not in captured.err
     assert "Traceback" not in captured.err
 
 
-def test_s07_genuine_legacy_compose_hint_remains_safe(tmp_path, capsys):
-    _write(tmp_path / "compose.yaml", S07_SENTINEL + ":\n  image: nginx\n")
+def test_genuine_legacy_compose_hint_remains_safe(tmp_path, capsys):
+    _write(tmp_path / "compose.yaml", TEST_SENTINEL + ":\n  image: nginx\n")
     assert main([str(tmp_path), "--select", "C002"]) == 3
     captured = capsys.readouterr()
     assert "docker-compose v1" in captured.err
-    assert S07_SENTINEL not in captured.out + captured.err
+    assert TEST_SENTINEL not in captured.out + captured.err

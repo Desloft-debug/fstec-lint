@@ -185,14 +185,14 @@ def check_missing_user(instructions: list[dict]) -> CheckResults:
 def check_add_remote_url(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
-        for inst in stage.instructions:
+        for position, inst in enumerate(stage.instructions, start=1):
             if inst["instruction"] != "ADD":
                 continue
             first_arg = inst["args"].split()[0] if inst["args"].split() else ""
             if first_arg.startswith(("http://", "https://")):
                 findings.append(
                     (
-                        _loc(stage, f"ADD sha256:{_private_location(inst['args'])}"),
+                        _loc(stage, f"ADD instruction:{position}"),
                         "ADD — загрузка по URL без проверки контрольной суммы",
                         inst["line"],
                     )
@@ -244,13 +244,13 @@ def check_latest_base_image(instructions: list[dict]) -> CheckResults:
 def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
-        for inst in stage.instructions:
+        for position, inst in enumerate(stage.instructions, start=1):
             if inst["instruction"] != "RUN":
                 continue
             if PIPE_TO_SHELL_RE.search(inst["args"]):
                 findings.append(
                     (
-                        _loc(stage, f"RUN sha256:{_private_location(inst['args'])}"),
+                        _loc(stage, f"RUN instruction:{position}"),
                         "RUN — вывод curl/wget передаётся напрямую в shell без проверки",
                         inst["line"],
                     )
@@ -261,8 +261,17 @@ def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
 def check_missing_healthcheck(instructions: list[dict]) -> CheckResults:
     if not instructions:
         return []
-    if any(i["instruction"] == "HEALTHCHECK" for i in instructions):
-        return []
+    stages = _build_stages(_stages(instructions))
+    stage = stages[-1] if stages else None
+    visited: set[int] = set()
+    while stage is not None and stage.index not in visited:
+        visited.add(stage.index)
+        checks = [i for i in stage.instructions if i["instruction"] == "HEALTHCHECK"]
+        if checks:
+            if checks[-1]["args"].strip().upper() != "NONE":
+                return []
+            break
+        stage = _stage_by_name(stages, stage.parent)
     return [("HEALTHCHECK", "в Dockerfile не задан HEALTHCHECK", instructions[0]["line"])]
 
 

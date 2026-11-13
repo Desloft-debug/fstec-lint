@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "findings": [
+    {
+      "rule_id": "D002",
+      "file": "docker_ADD\\Dockerfile",
+      "location": "stage 1: ADD https://user:SYNTHETIC_REVIEW_CREDENTIAL_6df1@synthetic.inva…#ba5fb17f"
+    }
+  ]
+}

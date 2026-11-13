@@ -9,6 +9,10 @@ from fstec_lint import auth, measures, terms
 from fstec_lint.checks import (
     compose_checks,
     dockerfile_checks,
+    dotenv_checks,
+    linux_checks,
+    nginx_checks,
+    postfix_checks,
     postgres_checks,
     sshd_checks,
     systemd_checks,
@@ -22,6 +26,13 @@ REGISTRY_BY_TARGET = {
     "postgresql_conf": postgres_checks.POSTGRESQL_CONF_REGISTRY,
     "sshd_config": sshd_checks.REGISTRY,
     "systemd_unit": systemd_checks.REGISTRY,
+    "dotenv": dotenv_checks.REGISTRY,
+    "login_defs": linux_checks.LOGIN_DEFS_REGISTRY,
+    "pwquality": linux_checks.PWQUALITY_REGISTRY,
+    "useradd_defaults": linux_checks.USERADD_REGISTRY,
+    "rsyslog": linux_checks.RSYSLOG_REGISTRY,
+    "nginx": nginx_checks.REGISTRY,
+    "postfix_main": postfix_checks.REGISTRY,
 }
 
 

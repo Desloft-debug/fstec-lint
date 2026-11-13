@@ -4,6 +4,8 @@ services:
   db:
     networks: [backend]
     image: postgres:16.4
+    cap_drop:
+      - ALL
     user: "999:999"
     read_only: true
     security_opt:

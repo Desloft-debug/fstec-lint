@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "findings": [
+    {
+      "rule_id": "P002",
+      "file": "hba_LDAP\\pg_hba.conf",
+      "location": "pg_hba: host all all 0.0.0.0/0 ldap ldapbindpasswd=SYNTHETIC_REVIEW_CREDENTIAL_6df1"
+    }
+  ]
+}

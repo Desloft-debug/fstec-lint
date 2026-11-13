@@ -5,9 +5,9 @@ import os
 import subprocess
 import sys
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
+from integration_helpers import displayed_path, displayed_uri
 
 from fstec_lint import baseline
 from fstec_lint.checks import compose_checks, postgres_checks
@@ -17,8 +17,8 @@ from fstec_lint.parsers.compose import parse_compose
 from fstec_lint.parsers.postgres import parse_pg_hba
 from fstec_lint.reporters import html, json_reporter, passport, sarif, text
 
-MARKER = "SYNTHETIC_S02_CREDENTIAL_817c"
-OTHER = "SYNTHETIC_S02_ROTATED_92ea"
+MARKER = "SYNTHETIC_TEST_CREDENTIAL_817c"
+OTHER = "SYNTHETIC_TEST_ROTATED_92ea"
 CASES = ["compose-dash", "compose-equals", "compose-literal", "hba-ldap", "hba-trust", "hba-md5"]
 REPORTERS = {
     "text": text,
@@ -74,7 +74,7 @@ def _findings(path, rule_id, line):
 
 def _report_contract(rendered, fmt, path, rule_id, line):
     assert rendered.strip()
-    reported_file = str(path.relative_to(Path.cwd()))
+    reported_file = displayed_path(path)
     if fmt == "json":
         entries = json.loads(rendered)
         assert len(entries) == 1
@@ -87,14 +87,14 @@ def _report_contract(rendered, fmt, path, rule_id, line):
         entries = json.loads(rendered)["runs"][0]["results"]
         assert len(entries) == 1 and entries[0]["ruleId"] == rule_id
         location = entries[0]["locations"][0]["physicalLocation"]
-        assert location["artifactLocation"]["uri"] == reported_file
+        assert location["artifactLocation"]["uri"] == displayed_uri(path)
         assert location["region"]["startLine"] == line
     else:
         assert rule_id in rendered and f"{reported_file}:{line}" in rendered
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_s02_public_finding_is_safe_before_reporting(tmp_path, case):
+def test_public_finding_is_safe_before_reporting(tmp_path, case):
     path, rule_id, line = _case(tmp_path, case)
     findings = _findings(path, rule_id, line)
     serialized = json.dumps(asdict(findings[0]), ensure_ascii=False)
@@ -104,7 +104,7 @@ def test_s02_public_finding_is_safe_before_reporting(tmp_path, case):
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_s02_check_api_is_safe_before_finding(tmp_path, case):
+def test_check_api_is_safe_before_finding(tmp_path, case):
     path, rule_id, line = _case(tmp_path, case)
     if rule_id == "C004":
         results = compose_checks.check_secrets_in_environment(parse_compose(path))
@@ -122,7 +122,7 @@ def test_s02_check_api_is_safe_before_finding(tmp_path, case):
 
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("fmt", REPORTERS)
-def test_s02_reporter_preserves_safe_finding(tmp_path, case, fmt):
+def test_reporter_preserves_safe_finding(tmp_path, case, fmt):
     path, rule_id, line = _case(tmp_path, case)
     rendered = REPORTERS[fmt].render(_findings(path, rule_id, line))
     _report_contract(rendered, fmt, path, rule_id, line)
@@ -132,7 +132,7 @@ def test_s02_reporter_preserves_safe_finding(tmp_path, case, fmt):
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("fmt", REPORTERS)
 @pytest.mark.parametrize("destination", ["stdout", "file"])
-def test_s02_cli_actual_outputs_are_safe(tmp_path, capsys, case, fmt, destination):
+def test_cli_actual_outputs_are_safe(tmp_path, capsys, case, fmt, destination):
     path, rule_id, line = _case(tmp_path, case)
     output = tmp_path / "saved.report"
     args = [str(path), "--select", rule_id, "--format", fmt, "--fail-on", "low"]
@@ -149,7 +149,7 @@ def test_s02_cli_actual_outputs_are_safe(tmp_path, capsys, case, fmt, destinatio
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_s02_baseline_api_and_saved_file_are_safe(tmp_path, capsys, case):
+def test_baseline_api_and_saved_file_are_safe(tmp_path, capsys, case):
     path, rule_id, line = _case(tmp_path, case)
     findings = _findings(path, rule_id, line)
     saved = tmp_path / "saved-baseline.json"
@@ -159,7 +159,7 @@ def test_s02_baseline_api_and_saved_file_are_safe(tmp_path, capsys, case):
     payload = json.loads(raw)
     assert len(payload["findings"]) == 1
     assert payload["findings"][0]["rule_id"] == rule_id
-    assert payload["findings"][0]["file"] == str(path.relative_to(Path.cwd()))
+    assert payload["findings"][0]["file"] == displayed_path(path)
     known = baseline.load(saved)
     assert baseline.apply(findings, known) == ([], 1)
     # Inspect actual read/write surfaces as well as render(), not a print-only mask.
@@ -189,7 +189,7 @@ def test_s02_baseline_api_and_saved_file_are_safe(tmp_path, capsys, case):
 
 @pytest.mark.parametrize("case", ["hba-ldap", "hba-trust", "hba-md5"])
 @pytest.mark.parametrize("surface", ["fingerprint", "sarif", "baseline"])
-def test_s02_hba_password_rotation_preserves_identity_and_baseline(tmp_path, case, surface):
+def test_hba_password_rotation_preserves_identity_and_baseline(tmp_path, case, surface):
     path, rule_id, line = _case(tmp_path, case)
     old = _findings(path, rule_id, line)
     saved = tmp_path / "rotation.json"
@@ -210,7 +210,7 @@ def test_s02_hba_password_rotation_preserves_identity_and_baseline(tmp_path, cas
 
 @pytest.mark.parametrize("method,rule_id", [("ldap", "P002"), ("trust", "P001")])
 @pytest.mark.parametrize("surface", ["identity", "partial-baseline"])
-def test_s02_hba_distinguishes_records_and_exact_duplicates(tmp_path, method, rule_id, surface):
+def test_hba_distinguishes_records_and_exact_duplicates(tmp_path, method, rule_id, surface):
     path = tmp_path / "pg_hba.conf"
     row = f"host all all 0.0.0.0/0 {method} ldapbindpasswd={MARKER}\n"
     different = f"host reporting analyst 0.0.0.0/0 {method} ldapbindpasswd={MARKER}\n"
@@ -232,7 +232,7 @@ def test_s02_hba_distinguishes_records_and_exact_duplicates(tmp_path, method, ru
 
 @pytest.mark.parametrize("method,rule_id", [("ldap", "P002"), ("trust", "P001")])
 @pytest.mark.parametrize("surface", ["api", "cli"])
-def test_s02_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, rule_id, surface):
+def test_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, rule_id, surface):
     path, _, line = _case(tmp_path, "hba-" + method)
     findings = _findings(path, rule_id, line)
     saved = tmp_path / "legacy-v3.json"
@@ -245,7 +245,7 @@ def test_s02_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, r
                 "findings": [
                     {
                         "rule_id": rule_id,
-                        "file": str(path.relative_to(Path.cwd())),
+                        "file": displayed_path(path),
                         "location": "pg_hba: " + row,
                     }
                 ],
@@ -290,7 +290,7 @@ def test_s02_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, r
     assert saved.read_bytes() == original
 
 
-def test_s02_unaffected_hand_authored_v3_remains_compatible(tmp_path, monkeypatch, capsys):
+def test_unaffected_hand_authored_v3_remains_compatible(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "compose.yaml"
     path.write_text("services:\n  app:\n    privileged: true\n", encoding="utf-8")
@@ -329,7 +329,7 @@ def test_s02_unaffected_hand_authored_v3_remains_compatible(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("bad", ["yaml", "baseline-json", "baseline-fields", "output-path"])
-def test_s02_error_channels_do_not_echo_secrets(tmp_path, capsys, bad):
+def test_error_channels_do_not_echo_secrets(tmp_path, capsys, bad):
     path, rule_id, _ = _case(tmp_path, "compose-dash")
     args = [str(path), "--select", rule_id, "--fail-on", "none"]
     if bad == "yaml":
@@ -359,7 +359,7 @@ def test_s02_error_channels_do_not_echo_secrets(tmp_path, capsys, bad):
 
 
 @pytest.mark.parametrize("case", ["compose-dash", "hba-ldap"])
-def test_s02_real_process_streams_and_exit_code(tmp_path, case):
+def test_real_process_streams_and_exit_code(tmp_path, case):
     path, rule_id, line = _case(tmp_path, case)
     process = subprocess.run(
         [
@@ -387,7 +387,7 @@ def test_s02_real_process_streams_and_exit_code(tmp_path, case):
 
 
 @pytest.mark.parametrize("value", ["${PASSWORD}", "$PASSWORD", "${PASSWORD:-}", "${PASSWORD:=}"])
-def test_s02_c004_nonsecret_references_are_not_findings(tmp_path, value):
+def test_c004_nonsecret_references_are_not_findings(tmp_path, value):
     path = tmp_path / "compose.yaml"
     path.write_text(
         "services:\n  app:\n    environment:\n      PASSWORD: " + value + "\n", encoding="utf-8"
@@ -397,7 +397,7 @@ def test_s02_c004_nonsecret_references_are_not_findings(tmp_path, value):
 
 
 @pytest.mark.parametrize("case", ["compose-dash", "hba-ldap"])
-def test_s02_suppression_and_selection_still_work(tmp_path, case):
+def test_suppression_and_selection_still_work(tmp_path, case):
     path, rule_id, line = _case(tmp_path, case)
     _findings(path, rule_id, line)
     assert scan(path, select=[rule_id], ignore=[rule_id]).findings == []
@@ -415,7 +415,7 @@ def test_s02_suppression_and_selection_still_work(tmp_path, case):
         ("P002", "host all all 10.0.0.0/24 ldap ldapbindpasswd=" + MARKER),
     ],
 )
-def test_s02_hba_negative_controls(tmp_path, rule_id, row):
+def test_hba_negative_controls(tmp_path, rule_id, row):
     path = tmp_path / "pg_hba.conf"
     path.write_text(row + "\n", encoding="utf-8")
     result = scan(path, select=[rule_id])

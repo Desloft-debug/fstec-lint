@@ -47,6 +47,29 @@ class _BoundedLoader(yaml.SafeLoader):
             self._depth -= 1
 
 
+def _compose_tag(loader: _BoundedLoader, node: Any) -> Any:
+    """Interpret a tag for one file; this does not merge Compose files."""
+    if node.tag == "!reset":
+        if isinstance(node, yaml.SequenceNode):
+            return []
+        if isinstance(node, yaml.MappingNode):
+            return {}
+        return None
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.ScalarNode):
+        tag = loader.resolve(yaml.ScalarNode, node.value, (node.style is None, False))
+        scalar = yaml.ScalarNode(tag, node.value, node.start_mark, node.end_mark, node.style)
+        return loader.construct_object(scalar, deep=True)
+    raise ValueError("invalid Compose tag")
+
+
+_BoundedLoader.add_constructor("!reset", _compose_tag)
+_BoundedLoader.add_constructor("!override", _compose_tag)
+
+
 def _guard_graph(root: Any) -> None:
     """Bound expanded traversal and representation cost without expanding aliases.
 
@@ -275,6 +298,12 @@ def parse_compose(path: Path) -> ComposeFile:
         loader.dispose()
     mapping = data if isinstance(data, dict) else {}
     _guard_schema(mapping)
+    services = mapping.get("services", {})
+    if "include" in mapping or (
+        isinstance(services, dict)
+        and any(isinstance(service, dict) and "extends" in service for service in services.values())
+    ):
+        raise ValueError("unsupported Compose include or extends")
 
     compose = ComposeFile(mapping)
     compose.service_lines, compose.key_spans = lines, spans

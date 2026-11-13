@@ -1,6 +1,6 @@
 """Small bounded resource fixtures, never OOM/benchmark shell payloads.
 
-Proposed acceptance envelopes for S06/S07: YAML and baseline <=8 MiB,
+Resource acceptance limits: YAML and baseline <=8 MiB,
 depth <=64, YAML aliases <=1024, expanded merge pairs <=65536; baseline
 <=10000 entries and scalar fields <=65536 chars. Owners may ratify/tighten
 these documented policy inputs; this file does not copy a parser algorithm.
@@ -16,7 +16,7 @@ from fstec_lint.cli import main
 from fstec_lint.engine import scan
 from fstec_lint.parsers.compose import parse_compose
 
-MARKER = "SYNTHETIC_S02_RESOURCE_643b"
+MARKER = "SYNTHETIC_TEST_RESOURCE_643b"
 MAX_BYTES = 8 * 1024 * 1024
 VALID_COMPOSE = "services:\n  app:\n    privileged: true\n"
 
@@ -48,7 +48,7 @@ def _yaml_merge(levels):
 
 
 @pytest.mark.parametrize("kind", ["bytes", "depth", "aliases", "merge"])
-def test_s02_yaml_resource_excess_is_controlled_error(tmp_path, capsys, kind):
+def test_yaml_resource_excess_is_controlled_error(tmp_path, capsys, kind):
     content = {
         "bytes": lambda: VALID_COMPOSE + "#" + "x" * MAX_BYTES + MARKER,
         "depth": lambda: _yaml_depth(128),
@@ -69,7 +69,7 @@ def test_s02_yaml_resource_excess_is_controlled_error(tmp_path, capsys, kind):
 
 
 @pytest.mark.parametrize("kind", ["bytes", "depth", "aliases", "merge"])
-def test_s02_yaml_valid_envelope_keeps_detection(tmp_path, kind):
+def test_yaml_valid_envelope_keeps_detection(tmp_path, kind):
     content = {
         "bytes": lambda: VALID_COMPOSE + "#" + "x" * (MAX_BYTES - len(VALID_COMPOSE) - 1),
         "depth": lambda: _yaml_depth(32),
@@ -85,7 +85,7 @@ def test_s02_yaml_valid_envelope_keeps_detection(tmp_path, kind):
     assert (result.findings[0].file, result.findings[0].line) == (str(path), expected_line)
 
 
-def test_s02_yaml_oversize_rejected_before_full_text_read(tmp_path, monkeypatch):
+def test_yaml_oversize_rejected_before_full_text_read(tmp_path, monkeypatch):
     path = tmp_path / "compose.yaml"
     path.write_bytes(b"#" + b"x" * MAX_BYTES)
     original = Path.read_text
@@ -129,7 +129,7 @@ def _baseline_content(kind, excessive):
 
 
 @pytest.mark.parametrize("kind", ["bytes", "depth", "entries", "scalar"])
-def test_s02_baseline_resource_excess_is_safe_usage_error(tmp_path, capsys, kind):
+def test_baseline_resource_excess_is_safe_usage_error(tmp_path, capsys, kind):
     saved = tmp_path / "resource.json"
     saved.write_bytes(_baseline_content(kind, True).encode("utf-8"))
     original = saved.read_bytes()
@@ -144,7 +144,7 @@ def test_s02_baseline_resource_excess_is_safe_usage_error(tmp_path, capsys, kind
 
 
 @pytest.mark.parametrize("kind", ["bytes", "depth", "entries", "scalar"])
-def test_s02_baseline_valid_envelope_remains_readable(tmp_path, kind):
+def test_baseline_valid_envelope_remains_readable(tmp_path, kind):
     saved = tmp_path / "valid.json"
     saved.write_bytes(_baseline_content(kind, False).encode("utf-8"))
     original = saved.read_bytes()

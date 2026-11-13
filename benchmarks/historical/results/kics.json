@@ -1,0 +1,283 @@
+{
+  "queries": [
+    {
+      "platform": "dockerCompose",
+      "query": "privileged_containers_enabled",
+      "rule": "C002",
+      "match": "full",
+      "samples": 4,
+      "tp": [
+        "positive1.yaml:webapp",
+        "positive2.yaml:webapp"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "container_capabilities_unrestricted",
+      "rule": "C003",
+      "match": "partial",
+      "samples": 5,
+      "tp": [
+        "positive1.yaml:webapp",
+        "positive2.yaml:webapp",
+        "positive3.yaml:webapp",
+        "positive4.yaml:webapp"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 1,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "docker_socket_mounted_in_container",
+      "rule": "C008",
+      "match": "full",
+      "samples": 2,
+      "tp": [
+        "positive1.yaml:service1"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 1,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "healthcheck_not_set",
+      "rule": "C013",
+      "match": "full",
+      "samples": 5,
+      "tp": [
+        "positive1.yaml:lelele-service",
+        "positive2.yaml:lelele-service",
+        "positive3.yaml:lelele-service"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "memory_not_limited",
+      "rule": "C012",
+      "match": "partial",
+      "samples": 7,
+      "tp": [
+        "positive1.yaml:zapzop",
+        "positive2.yaml:criwhat",
+        "positive3.yaml:zapzop",
+        "positive4.yaml:zapzop",
+        "positive5.yaml:redis"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "cpus_not_limited",
+      "rule": "C012",
+      "match": "partial",
+      "samples": 7,
+      "tp": [
+        "positive1.yaml:zapzop",
+        "positive2.yaml:criwhat",
+        "positive3.yaml:zapzop",
+        "positive4.yaml:redis",
+        "positive5.yaml:zapzop"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "no_new_privileges_not_set",
+      "rule": "C010",
+      "match": "full",
+      "samples": 3,
+      "tp": [
+        "positive1.yaml:service-service-service",
+        "positive2.yaml:service-service-service"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 1,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "shared_host_network_namespace",
+      "rule": "C007",
+      "match": "full",
+      "samples": 2,
+      "tp": [
+        "positive1.yaml:mongo"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 1,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerCompose",
+      "query": "volume_has_sensitive_host_directory",
+      "rule": "C015",
+      "match": "full",
+      "samples": 7,
+      "tp": [
+        "positive2.yaml",
+        "positive3.yaml",
+        "positive4.yaml:yesno"
+      ],
+      "fn": [
+        "positive1.yaml:backup"
+      ],
+      "fp": [],
+      "tn_files": 3,
+      "parse_errors": {},
+      "disputed": {
+        "positive1.yaml:backup": "'- /var/lib/backup/data' — анонимный том с путём внутри контейнера, каталог хоста не монтируется"
+      }
+    },
+    {
+      "platform": "dockerfile",
+      "query": "missing_user_instruction",
+      "rule": "D001",
+      "match": "full",
+      "samples": 7,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile",
+        "positive3.dockerfile"
+      ],
+      "fn": [],
+      "fp": [
+        "negative1.dockerfile",
+        "negative4.dockerfile"
+      ],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerfile",
+      "query": "last_user_is_root",
+      "rule": "D001",
+      "match": "full",
+      "samples": 8,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile",
+        "positive3.dockerfile",
+        "positive4.dockerfile",
+        "positive5.dockerfile"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 3,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerfile",
+      "query": "healthcheck_instruction_missing",
+      "rule": "D006",
+      "match": "full",
+      "samples": 6,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile",
+        "positive3.dockerfile"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 3,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerfile",
+      "query": "image_version_not_explicit",
+      "rule": "D004",
+      "match": "full",
+      "samples": 10,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile",
+        "positive3.dockerfile",
+        "positive4.dockerfile",
+        "positive5.dockerfile"
+      ],
+      "fn": [],
+      "fp": [
+        "negative1.dockerfile",
+        "negative5.dockerfile"
+      ],
+      "tn_files": 3,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerfile",
+      "query": "image_version_using_latest",
+      "rule": "D004",
+      "match": "full",
+      "samples": 4,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 2,
+      "parse_errors": {},
+      "disputed": {}
+    },
+    {
+      "platform": "dockerfile",
+      "query": "curl_or_wget_instead_of_add",
+      "rule": "D002",
+      "match": "full",
+      "samples": 5,
+      "tp": [
+        "positive1.dockerfile",
+        "positive2.dockerfile"
+      ],
+      "fn": [],
+      "fp": [],
+      "tn_files": 3,
+      "parse_errors": {},
+      "disputed": {}
+    }
+  ],
+  "totals": {
+    "tp": 46,
+    "tp_full": 32,
+    "fn": 1,
+    "fn_full": 1,
+    "fp": 4,
+    "fp_full": 4,
+    "tn_files": 31,
+    "negative_files": 35,
+    "tp_partial": 14,
+    "fn_partial": 0,
+    "fp_partial": 0
+  }
+}

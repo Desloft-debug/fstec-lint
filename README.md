@@ -1,11 +1,18 @@
 # fstec-lint
 
+> **Кандидат разработки 1.1.1.dev0, не выпуск.** Зарегистрированы 56 ID; интеграция и проверки не завершены. Нормативные привязки возвращённых правил не подтверждены первоисточниками. Не используйте результат как доказательство соответствия. Точные ограничения и результаты см. в [проверках](docs/verification.md).
+>
+> Анализируются отдельные Compose-файлы, Dockerfile, PostgreSQL, sshd, systemd, dotenv, некоторые Linux-конфигурации, nginx и Postfix в каталоге `postfix`. Compose merge не реализован: обнаруженная пара основного и override-файла, а также `include`/`extends` вызывают ошибку неполного анализа. PostgreSQL Include поддерживается в пределах выбранного дерева; подробности — в [документации](docs/postgresql-includes.md). Раскрытие SSH Include ограничено выбранным деревом; относительная база — каталог основного файла, а не системный `/etc/ssh`. Проверка/открытие путей не атомарны: сканирование дерева, изменяемого недоверенным субъектом, может прочитать файл вне корня.
+>
+> Форматы: `text`, `json`, `html`, `sarif`, `passport`, `docx`. Для DOCX требуется `--output`; дополнительный пакет не нужен. Коды: 0 — нормальное завершение, 1 — находка по порогу, 2 — ошибка вызова/записи, 3 — неполный разбор; 1 имеет приоритет над 3. Автоматическая миграция старого Docker/HBA baseline не реализована. D002/D005 не подавляются даже при совпадении нового baseline; пересоздание файла не устраняет это ограничение.
+
+
 [![CI](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml/badge.svg)](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Линтер конфигураций для тех, кто готовит инфраструктуру к аттестации.
 Разбирает `docker-compose.yml`, `Dockerfile`, `postgresql.conf`,
-`pg_hba.conf`, `sshd_config` и юниты systemd — **41 правило**, каждое со
+`pg_hba.conf`, `sshd_config` и юниты systemd — **56 ID в каталоге**, исторически каждое со
 ссылкой на пункт нормативного документа.
 
 Docker Bench, Lynis, Trivy и Checkov находят те же проблемы и мапят их на
@@ -305,6 +312,7 @@ python -m pytest tests/
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]" -c constraints.txt
 .venv/bin/python -m fstec_lint --help
+.venv/bin/python -m fstec_lint examples/hardened-stack --fail-on high
 ```
 
 ```powershell
@@ -312,6 +320,7 @@ python3 -m venv .venv
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]" -c constraints.txt
 .venv\Scripts\python.exe -m fstec_lint --help
+.venv\Scripts\python.exe -m fstec_lint examples\hardened-stack --fail-on high
 ```
 
 Если `.venv` уже исправна и установлена для этой рабочей копии, используйте её без повторной установки: `.venv/bin/python -m fstec_lint --help` в Linux или `.venv\Scripts\python.exe -m fstec_lint --help` в PowerShell. Проверить привязку и зависимости можно командами `python -c "import fstec_lint; print(fstec_lint.__file__)"` и `python -m pip check`, вызывая соответствующий интерпретатор `.venv`.
@@ -344,7 +353,7 @@ fstec-lint --version
 `postgresql.conf`, `pg_hba.conf`, `sshd_config` и `*.service` в указанном
 каталоге. Служебные и сторонние каталоги (`.git`, `node_modules`,
 `vendor`, `.venv`, `site-packages`, `__pycache__`, кеши линтеров,
-`.terraform`, `.agent-runs`) пропускаются при рекурсивном обходе — чужие конфиги правятся не вами и
+`.terraform` и служебные каталоги) пропускаются при рекурсивном обходе — чужие конфиги правятся не вами и
 только создают шум. Всё остальное исключается через `--exclude` (glob по
 имени или по пути относительно корня сканирования, флаг можно повторять).
 
@@ -483,7 +492,7 @@ docker-compose.yml / compose.yaml (15):
 
 Затронутые пункты приказа ФСТЭК N 117: п. 34 б) (1), п. 34 г) (3), п. 34
  з) (2), п. 34 к) (1), п. 34 м) (1), п. 34 о) (2), п. 63 а) (6), п. 63 б
-) (8), п. 63 в) (2), п. 63 д) (5), п. 63 з) (1), п. 63 п) (4), п. 63 р) 
+) (8), п. 63 в) (2), п. 63 д) (5), п. 63 з) (1), п. 63 п) (4), п. 63 р)
 (2), п. 63 с) (2)
 ```
 
@@ -498,8 +507,9 @@ docker-compose.yml / compose.yaml (15):
 
 Главная проблема при подключении любого линтера к живому проекту — он
 сразу даёт десятки находок, CI краснеет, и его отключают. Baseline
-фиксирует текущее состояние как известный долг: сборка падает только на
-**новых** находках, а совпавшие старые исключаются из отчёта и учитываются в stderr.
+фиксирует текущее состояние как известный долг: совпавшие находки обычно
+исключаются из отчёта и учитываются в stderr. D002 и D005 пока не подавляются:
+номер инструкции не позволяет надёжно отличить прежнюю команду от новой.
 
 ```bash
 fstec-lint . --write-baseline .fstec-lint-baseline.json   # один раз, зафиксировать долг
@@ -512,8 +522,7 @@ fstec-lint . --baseline .fstec-lint-baseline.json         # в CI
 $ fstec-lint examples/vulnerable-stack --write-baseline baseline.json
 fstec-lint: в baseline записано находок: 48 (baseline.json)
 $ fstec-lint examples/vulnerable-stack --baseline baseline.json --fail-on critical
-fstec-lint: подавлено baseline-ом: 48
-fstec-lint: нарушений не найдено.
+# Неоднозначные D002/D005 останутся в отчёте для повторной проверки.
 ```
 
 Старые HBA-записи baseline v3 с исходной строкой требуют явного пересоздания
@@ -734,8 +743,8 @@ pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 Ближайший приоритет — устранить известные утечки в Compose C004 и HBA с
 совместимой миграцией baseline, затем ограничить расход ресурсов и согласовать
 политику символьных ссылок; подробности — в [модели безопасности](docs/security.md).
-Раскрытие PostgreSQL include повысит полноту проверки, но требует безопасного
-разрешения путей и учёта порядка переопределений. Kubernetes потребует нового
+PostgreSQL Include ограничен выбранным деревом и не устраняет гонку при чтении.
+Kubernetes потребует нового
 парсера и правил и поэтому выходит за границы этого инкремента. Нормативную
 миграцию можно оценивать только после проверки официального первоисточника и
 его применимости. Порядок дальнейшей реализации не является обещанием релиза.
@@ -752,11 +761,8 @@ pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 - [ ] Проверка `.env`-файлов на секреты в открытом виде — сейчас они
       ловятся только в секции `environment` внутри compose, сам `.env`
       не сканируется
-- [ ] Раскрытие `Include` в `sshd_config` и `include`/`include_dir` в
-      `postgresql.conf`: сейчас проверяется только переданный файл, а в
-      дистрибутивах по умолчанию действующее значение директивы приходит
-      из подключаемого — «нарушений не найдено» на таком конфиге
-      означает меньше, чем выглядит (см. «Что разбор не видит»)
+- [ ] Расширить поддержку Include и проверить её на всех целевых платформах;
+      ограничения PostgreSQL описаны в [postgresql-includes.md](docs/postgresql-includes.md).
 
 Вне области применения: меры, которые статический анализ конфигураций
 не может подтвердить в принципе (антивирусная защита, обнаружение

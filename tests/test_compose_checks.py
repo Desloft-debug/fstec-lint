@@ -125,12 +125,14 @@ def test_missing_resource_limits_flagged():
 
 
 def test_resource_limits_via_legacy_keys_ok():
-    compose = {"services": {"web": {"mem_limit": "512m"}}}
+    compose = {"services": {"web": {"mem_limit": "512m", "cpus": 1}}}
     assert cc.check_missing_resource_limits(compose) == []
 
 
 def test_resource_limits_via_deploy_ok():
-    compose = {"services": {"web": {"deploy": {"resources": {"limits": {"memory": "512M"}}}}}}
+    compose = {
+        "services": {"web": {"deploy": {"resources": {"limits": {"memory": "512M", "cpus": 1}}}}}
+    }
     assert cc.check_missing_resource_limits(compose) == []
 
 

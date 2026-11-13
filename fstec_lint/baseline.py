@@ -126,6 +126,13 @@ def load(path: Path) -> set[str]:
             raise BaselineError(
                 "baseline: недопустимые поля записи — пересоздайте через --write-baseline"
             )
+        if entry["rule_id"] in {"D002", "D005"} and not re.fullmatch(
+            r"(?:global|stage .+): (?:ADD|RUN) instruction:[1-9][0-9]*", entry["location"]
+        ):
+            raise BaselineError(
+                "baseline: устаревшая Docker-запись; проверьте находки и пересоздайте "
+                "через --write-baseline"
+            )
         if entry["rule_id"] in {"P001", "P002"} and not HBA_LOCATION.fullmatch(entry["location"]):
             raise BaselineError(
                 "baseline: устаревшая или недопустимая HBA-запись; "
@@ -137,5 +144,10 @@ def load(path: Path) -> set[str]:
 
 def apply(findings: list[Finding], fingerprints: set[str]) -> tuple[list[Finding], int]:
     """Отсеивает находки из baseline. Возвращает (оставшиеся, сколько подавлено)."""
-    remaining = [f for f in findings if f.fingerprint() not in fingerprints]
+    # An ordinal cannot distinguish a replacement instruction from the one
+    # previously accepted. Do not suppress ambiguous Docker commands: storing
+    # their contents or a guessable digest can expose embedded credentials.
+    remaining = [
+        f for f in findings if f.rule.id in {"D002", "D005"} or f.fingerprint() not in fingerprints
+    ]
     return remaining, len(findings) - len(remaining)

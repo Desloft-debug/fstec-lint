@@ -1,26 +1,17 @@
-"""Паспорт уязвимости по ГОСТ Р 56545-2015.
-
-ГОСТ Р 56545-2015 «Защита информации. Уязвимости информационных систем.
-Правила описания уязвимостей» (введён приказом Росстандарта от
-19.08.2015 N 1180-ст) задаёт структуру описания уязвимости и форму
-паспорта (приложение А). Приказ ФСТЭК N 117 ссылается на этот стандарт.
-
-Формат нужен, чтобы результат прогона прикладывался к материалам оценки
-как есть, а не переписывался руками. Пункт 20 и) Методики оценки Кзи
-называет исходными данными «результаты работы инструментальных средств
-оценки (анализа) защищённости»; паспорт — та форма, в которой их ждут.
-
-Элементы, недоступные статическому анализу (версия ПО, аппаратная
-платформа, язык программирования), помечаются отметкой «не
-определяется». Прочерк в паспорте лучше правдоподобной догадки.
-"""
+"""Structured and text descriptions of findings; no certification claim."""
 
 from __future__ import annotations
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from .. import vulnclass
 from ..models import Finding, Severity
+from ._common import report_data
+
+if TYPE_CHECKING:
+    from ..engine import ScanResult
+
 
 NOT_DETERMINED = "не определяется статическим анализом конфигурации"
 
@@ -45,10 +36,17 @@ TARGET_SOFTWARE = {
     "pg_hba": "PostgreSQL (файл управления доступом клиентов)",
     "sshd_config": "OpenSSH, серверная часть (sshd)",
     "systemd_unit": "systemd (файл модуля службы)",
+    "dotenv": ".env / .env.* / *.env (переменные окружения)",
+    "login_defs": "shadow-utils (параметры учётных записей, login.defs)",
+    "pwquality": "libpwquality (требования к паролям, pwquality.conf)",
+    "rsyslog": "rsyslog (служба регистрации событий)",
+    "nginx": "nginx (веб-сервер)",
+    "useradd_defaults": "shadow-utils (параметры новых учётных записей, useradd)",
+    "postfix_main": "Postfix (почтовый сервер)",
 }
 
 
-def _identifier(finding: Finding, index: int, today: date) -> str:
+def identifier(index: int, today: date) -> str:
     """Идентификатор уязвимости по п. 5.2.3: код БД, год, порядковый номер."""
     return f"FLINT-{today.year}-{index:04d}"
 
@@ -68,21 +66,19 @@ def _detection_rule(finding: Finding) -> str:
 
 def _service_port(finding: Finding) -> str:
     """Служба (порт) по п. 5.2.8 — только там, где находка про порт."""
-    if finding.rule.id in ("C005", "C011"):
-        return f"{finding.detail.split()[1] if len(finding.detail.split()) > 1 else ''}/tcp".strip(
-            "/"
-        )
+    # Free-form detail is not a structured port field. Do not infer or
+    # duplicate arbitrary tokens into auxiliary passport fields.
     return NOT_DETERMINED
 
 
-def _passport(finding: Finding, index: int, today: date) -> list[str]:
+def passport_rows(finding: Finding, index: int, today: date) -> list[tuple[str, str]]:
     rule = finding.rule
     where = finding.relative_file()
     if finding.line is not None:
         where = f"{where}:{finding.line}"
-    rows = [
+    return [
         ("Наименование уязвимости", f"{rule.title} ({finding.location})"),
-        ("Идентификатор уязвимости", _identifier(finding, index, today)),
+        ("Идентификатор уязвимости", identifier(index, today)),
         ("Идентификаторы других систем описаний уязвимостей", NOT_DETERMINED),
         ("Краткое описание уязвимости", rule.description),
         ("Класс уязвимости", VULNERABILITY_CLASS),
@@ -112,22 +108,30 @@ def _passport(finding: Finding, index: int, today: date) -> list[str]:
             f"Мероприятие: {rule.activity}. Факт: {finding.detail}",
         ),
     ]
+
+
+def _passport(finding: Finding, index: int, today: date) -> list[str]:
+    rows = passport_rows(finding, index, today)
     width = max(len(name) for name, _ in rows)
-    out = [f"Паспорт уязвимости № {index} (ГОСТ Р 56545-2015, приложение А)", ""]
+    out = [f"Паспорт уязвимости № {index}", ""]
     out += [f"{name.ljust(width)} | {value}" for name, value in rows]
     out.append("")
     return out
 
 
-def render(findings: list[Finding], today: date | None = None) -> str:
+def render(findings: list[Finding] | ScanResult, today: date | None = None) -> str:
+    data = report_data(findings)
+    findings = data.findings
     today = today or date.today()
     if not findings:
-        return "fstec-lint: нарушений не найдено, паспорта уязвимостей не составлялись."
+        return "\n".join(
+            ["fstec-lint: находок не найдено, паспорта уязвимостей не составлялись.", *data.notes()]
+        )
 
     lines = [
         "ПАСПОРТА УЯЗВИМОСТЕЙ",
-        "Составлены по ГОСТ Р 56545-2015 «Защита информации. Уязвимости",
-        "информационных систем. Правила описания уязвимостей».",
+        "Структурированные описания результатов статического анализа.",
+        *data.notes(),
         f"Дата составления: {today.strftime('%d/%m/%Y')}. Всего: {len(findings)}.",
         "",
         "=" * 78,

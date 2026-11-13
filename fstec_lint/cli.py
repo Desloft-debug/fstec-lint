@@ -6,9 +6,17 @@ from pathlib import Path
 
 from . import __version__
 from . import baseline as baseline_module
-from .engine import RulesError, filter_by_uz, filter_rules, load_rules, scan, unknown_patterns
+from .engine import (
+    RulesError,
+    ScanResult,
+    filter_by_uz,
+    filter_rules,
+    load_rules,
+    scan,
+    unknown_patterns,
+)
 from .models import Rule, Severity
-from .reporters import html, json_reporter, passport, rules_catalog, sarif, text
+from .reporters import docx, html, json_reporter, passport, rules_catalog, sarif, text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f",
         "--format",
-        choices=["text", "json", "html", "sarif", "passport"],
+        choices=["text", "json", "html", "sarif", "passport", "docx"],
         default="text",
         help=("формат отчёта; passport — паспорта уязвимостей по ГОСТ Р 56545-2015 (приложение А)"),
     )
@@ -99,12 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline",
         metavar="FILE",
-        help="не сообщать о находках, перечисленных в baseline-файле (падать только на новых)",
+        help="подавить совпадающие находки из baseline; D002/D005 не подавляются",
     )
     parser.add_argument(
         "--write-baseline",
         metavar="FILE",
-        help="записать текущие находки в baseline-файл и выйти с кодом 0",
+        help="записать текущие находки в baseline-файл; при ошибке сканирования код 3",
     )
     return parser
 
@@ -223,18 +231,31 @@ def _run(argv: list[str] | None) -> int:
         if suppressed:
             print(f"fstec-lint: подавлено baseline-ом: {suppressed}", file=sys.stderr)
 
-    if args.format == "json":
+    report_result = ScanResult(
+        findings=findings, errors=result.errors, suppressed=result.suppressed
+    )
+    if args.format == "docx":
+        if not args.output:
+            raise UsageError("для формата docx требуется --output")
+        applied = len(filter_by_uz(filter_rules(all_rules, select, ignore), args.uz))
+        try:
+            Path(args.output).write_bytes(docx.render(report_result, root.name, applied))
+        except OSError as exc:
+            raise UsageError(f"не удалось записать отчёт: {type(exc).__name__}") from None
+        output = None
+    elif args.format == "json":
         output = json_reporter.render(findings)
     elif args.format == "html":
-        output = html.render(findings, title=f"fstec-lint report — {root.name}")
+        output = html.render(report_result, title=f"fstec-lint report — {root.name}")
     elif args.format == "sarif":
-        output = sarif.render(findings)
+        output = sarif.render(report_result)
     elif args.format == "passport":
-        output = passport.render(findings)
+        output = passport.render(report_result)
     else:
-        output = text.render(findings)
+        output = text.render(report_result)
 
-    _write(output, args.output)
+    if output is not None:
+        _write(output, args.output)
 
     if result.errors:
         print(

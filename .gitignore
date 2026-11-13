@@ -13,7 +13,6 @@ fstec-lint-report.*
 .coverage.*
 htmlcov/
 
-.agent-runs/
 .mypy_cache/
 .ruff_cache/
 coverage.xml

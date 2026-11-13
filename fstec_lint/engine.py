@@ -4,15 +4,26 @@ import fnmatch
 import os
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .checks import compose_checks, dockerfile_checks, postgres_checks, sshd_checks, systemd_checks
+from .checks import (
+    compose_checks,
+    dockerfile_checks,
+    dotenv_checks,
+    linux_checks,
+    nginx_checks,
+    postfix_checks,
+    postgres_checks,
+    sshd_checks,
+    systemd_checks,
+)
 from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
+from .parsers.base import BoundedReader, SourceLine
 from .parsers.compose import (
     MAX_FILE_BYTES,
     _BoundedLoader,
@@ -21,7 +32,11 @@ from .parsers.compose import (
     parse_compose,
 )
 from .parsers.dockerfile import parse_dockerfile
-from .parsers.postgres import parse_pg_hba, parse_postgresql_conf
+from .parsers.dotenv import EnvFile, parse_dotenv
+from .parsers.linux import parse_login_defs, parse_pwquality, parse_rsyslog, parse_useradd_defaults
+from .parsers.nginx import NginxConfig, parse_nginx
+from .parsers.postfix import parse_postfix_main
+from .parsers.postgres import PostgreSQLConfig, parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
 from .parsers.systemd import parse_systemd_unit
 from .pdn import in_base_set
@@ -33,6 +48,8 @@ COMPOSE_FILE_PATTERNS = (
     "docker-compose*.yaml",
     "compose.yml",
     "compose.yaml",
+    "compose.override.yml",
+    "compose.override.yaml",
 )
 POSTGRESQL_CONF_PATTERNS = ("postgresql.conf",)
 PG_HBA_PATTERNS = ("pg_hba.conf",)
@@ -214,20 +231,31 @@ def unknown_patterns(rules: list[Rule], patterns: Sequence[str]) -> list[str]:
     return [p for p in patterns if not any(_matches_rule(rule.id, [p]) for rule in rules)]
 
 
-def inline_suppressions(path: Path) -> dict[int, set[str]]:
+def inline_suppressions(
+    path: Path, *, comment_offsets: Mapping[int, int] | None = None, scan_root: Path | None = None
+) -> dict[int, set[str]]:
     """{строка: набор правил} из комментариев в самом файле.
 
     Пустой набор означает «подавить любое правило на этой строке».
     Комментарий действует на свою строку и на следующую.
     """
-    with path.open("rb") as source:
-        data = source.read(MAX_FILE_BYTES + 1)
+    # Parsers that know the grammar may supply zero-based offsets of actual
+    # comment markers, keyed by one-based physical line number. Without them,
+    # retain the existing behavior for currently supported formats.
+    data = BoundedReader(scan_root or path.parent).read(path).encode("utf-8")
     if len(data) > MAX_FILE_BYTES:
         raise ValueError("suppression resource limit exceeded")
     text = data.decode("utf-8")
 
     suppressions: dict[int, set[str]] = {}
     for lineno, line in enumerate(text.splitlines(), start=1):
+        if comment_offsets is not None:
+            offset = comment_offsets.get(lineno)
+            if offset is None:
+                continue
+            if offset < 0 or offset >= len(line) or line[offset] != "#":
+                raise ValueError("invalid comment offset")
+            line = line[offset:]
         match = SUPPRESSION_RE.search(line)
         if match is None:
             continue
@@ -347,6 +375,13 @@ def discover_files(
         "sshd_config": [],
         "systemd_unit": [],
         "dockerfile": [],
+        "dotenv": [],
+        "login_defs": [],
+        "pwquality": [],
+        "useradd_defaults": [],
+        "rsyslog": [],
+        "nginx": [],
+        "postfix_main": [],
     }
 
     for path in _candidate_files(root, exclude, on_error, production_only=production_only):
@@ -363,6 +398,33 @@ def discover_files(
             found["systemd_unit"].append(path)
         elif _matches_any(name, DOCKERFILE_PATTERNS):
             found["dockerfile"].append(path)
+        elif name == ".env" or name.startswith(".env.") or name.endswith(".env"):
+            found["dotenv"].append(path)
+        elif name == "login.defs":
+            found["login_defs"].append(path)
+        elif name == "pwquality.conf" or (
+            path.parent.name == "pwquality.conf.d" and name.endswith(".conf")
+        ):
+            found["pwquality"].append(path)
+        elif name == "useradd" and path.parent.name == "default":
+            found["useradd_defaults"].append(path)
+        elif name == "rsyslog.conf":
+            found["rsyslog"].append(path)
+        elif name == "nginx.conf" or (
+            path.parent.name in {"conf.d", "sites-enabled"}
+            and path.parent.parent.name == "nginx"
+            and (path.parent.name == "sites-enabled" or name.endswith(".conf") or root.is_file())
+        ):
+            found["nginx"].append(path)
+        elif name == "main.cf" and path.parent.name.lower() == "postfix":
+            found["postfix_main"].append(path)
+    main_dirs = {p.parent for p in found["pwquality"] if p.name == "pwquality.conf"}
+    found["pwquality"] = [
+        p
+        for p in found["pwquality"]
+        if p.parent.name != "pwquality.conf.d" or p.parent.parent not in main_dirs
+    ]
+    found["nginx"].sort(key=lambda p: (p.name != "nginx.conf", str(p)))
     return found
 
 
@@ -387,6 +449,8 @@ def _finding(rule: Rule, path: Path, item: CheckResult) -> Finding:
     """Собирает Finding из 3- или 4-элементного результата проверки."""
     location, detail, line = item[0], item[1], item[2]
     suppress_lines = item[3] if len(item) > 3 else ()
+    if isinstance(line, SourceLine):
+        path, line = Path(line.file), int(line)
     return Finding(
         rule=rule,
         file=str(path),
@@ -405,7 +469,10 @@ def _run_registry(
     parse: Callable[[Path], Any],
     boundary: Path | None,
 ) -> None:
+    included: set[Path] = set()
     for path in paths:
+        if path.resolve() in included:
+            continue
         # Один битый или бинарный файл не должен ронять весь прогон:
         # имя файла с расширением .service ещё не гарантирует, что внутри
         # текстовый юнит systemd.
@@ -413,6 +480,8 @@ def _run_registry(
             if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
                 raise ValueError("path outside scan root")
             data = parse(path)
+            if isinstance(data, NginxConfig):
+                included.update(Path(p) for p in data.comment_offsets)
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
             description = _describe(exc)
             if (
@@ -443,21 +512,52 @@ def _run_registry(
                     )
                 )
 
-        try:
-            if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
-                raise ValueError("path outside scan root")
-            suppressions = inline_suppressions(path)
-        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
-            result.errors.append(
-                ScanError(
-                    file=str(path), message=f"не удалось прочитать подавления: {_describe(exc)}"
+        suppression_cache: dict[str, dict[int, set[str]]] = {}
+        for finding in file_findings:
+            origin = Path(finding.file)
+            try:
+                if boundary is not None and not origin.resolve(strict=True).is_relative_to(
+                    boundary
+                ):
+                    result.errors.append(
+                        ScanError(file=str(path), message="недопустимое происхождение находки")
+                    )
+                    continue
+                if finding.file not in suppression_cache:
+                    offsets = (
+                        data.comment_offsets
+                        if isinstance(data, EnvFile) and origin == path
+                        else data.comment_offsets.get(str(origin.resolve()), {})
+                        if isinstance(data, (NginxConfig, PostgreSQLConfig))
+                        else None
+                    )
+                    suppression_cache[finding.file] = inline_suppressions(
+                        origin, comment_offsets=offsets, scan_root=boundary
+                    )
+                suppression_candidate = finding
+                if isinstance(data, EnvFile) and origin == path:
+                    ends = tuple(
+                        entry.end_line
+                        for entry in data.entries
+                        if entry.line == finding.line
+                        and entry.end_line is not None
+                        and entry.end_line != entry.line
+                    )
+                    suppression_candidate = replace(
+                        finding, suppress_lines=(*finding.suppress_lines, *ends)
+                    )
+                if _is_suppressed(suppression_candidate, suppression_cache[finding.file]):
+                    result.suppressed += 1
+                else:
+                    result.findings.append(finding)
+            except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+                result.errors.append(
+                    ScanError(
+                        file=str(origin),
+                        message=f"не удалось прочитать подавления: {_describe(exc)}",
+                    )
                 )
-            )
-            result.findings.extend(file_findings)
-            continue
-        kept = [f for f in file_findings if not _is_suppressed(f, suppressions)]
-        result.suppressed += len(file_findings) - len(kept)
-        result.findings.extend(kept)
+                result.findings.append(finding)
 
 
 def scan(
@@ -484,21 +584,64 @@ def scan(
         )
 
     files = discover_files(root, exclude, _walk_error, production_only=production_only)
+    if rules_by_target.get("compose") and not root.is_file():
+        compose_names: dict[Path, set[str]] = {}
+        for compose_file in files["compose"]:
+            compose_names.setdefault(compose_file.parent, set()).add(compose_file.name.lower())
+        for directory, names in compose_names.items():
+            bases = {"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+            overrides = {
+                "compose.override.yaml",
+                "compose.override.yml",
+                "docker-compose.override.yaml",
+                "docker-compose.override.yml",
+            }
+            if names & bases and names & overrides:
+                result.errors.append(
+                    ScanError(
+                        file=str(directory), message="объединение Compose файлов не поддерживается"
+                    )
+                )
     try:
-        boundary = None if root.is_file() else root.resolve(strict=True)
+        boundary = root.resolve(strict=True).parent if root.is_file() else root.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         result.errors.append(
             ScanError(file=str(root), message=f"не удалось определить границу: {_describe(exc)}")
         )
         return result
 
+    fragment_groups: dict[Path, list[Path]] = {}
+    for file in files["pwquality"]:
+        if file.parent.name == "pwquality.conf.d":
+            fragment_groups.setdefault(file.parent, []).append(file)
+    fragment_inputs: dict[Path, tuple[Path, ...]] = {}
+    for group in fragment_groups.values():
+        ordered = tuple(sorted(group, key=lambda p: p.name))
+        fragment_inputs[ordered[0]] = ordered
+        files["pwquality"] = [p for p in files["pwquality"] if p not in ordered[1:]]
+
     registries: list[tuple[str, Mapping[str, CheckFn], Callable[[Path], Any]]] = [
         ("compose", compose_checks.REGISTRY, parse_compose),
-        ("postgresql_conf", postgres_checks.POSTGRESQL_CONF_REGISTRY, parse_postgresql_conf),
+        (
+            "postgresql_conf",
+            postgres_checks.POSTGRESQL_CONF_REGISTRY,
+            lambda p: parse_postgresql_conf(p, scan_root=boundary),
+        ),
         ("pg_hba", postgres_checks.PG_HBA_REGISTRY, parse_pg_hba),
-        ("sshd_config", sshd_checks.REGISTRY, parse_sshd_config),
+        ("sshd_config", sshd_checks.REGISTRY, lambda p: parse_sshd_config(p, scan_root=boundary)),
         ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
+        ("dotenv", dotenv_checks.REGISTRY, parse_dotenv),
+        ("login_defs", linux_checks.LOGIN_DEFS_REGISTRY, parse_login_defs),
+        (
+            "pwquality",
+            linux_checks.PWQUALITY_REGISTRY,
+            lambda p: parse_pwquality(p, scan_root=boundary, fragments=fragment_inputs.get(p)),
+        ),
+        ("useradd_defaults", linux_checks.USERADD_REGISTRY, parse_useradd_defaults),
+        ("postfix_main", postfix_checks.REGISTRY, parse_postfix_main),
+        ("nginx", nginx_checks.REGISTRY, lambda p: parse_nginx(p, scan_root=boundary)),
+        ("rsyslog", linux_checks.RSYSLOG_REGISTRY, lambda p: parse_rsyslog(p, scan_root=boundary)),
     ]
     for target, registry, parse in registries:
         target_rules = rules_by_target.get(target, [])
