@@ -189,65 +189,65 @@ def _hba_comment_start(line: str) -> int:
     return len(line)
 
 
-def parse_pg_hba(path: Path) -> list[dict]:
+def parse_pg_hba(path: Path, scan_root: Path | None = None) -> list[dict]:
     """Разбирает pg_hba.conf в список записей {type, database, user, address, method, options}."""
     records: list[dict] = []
-    with open(path, encoding="utf-8") as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.rstrip("\r\n")
-            # PostgreSQL joins even comments and quoted strings before parsing.
-            # Reject this form until that preprocessing is supported, rather
-            # than misinterpret a commented continuation as a new record.
-            if line.endswith("\\"):
-                raise ValueError("unsupported pg_hba continuation")
-            line = line[: _hba_comment_start(line)]
-            parts = _hba_tokens(line)
-            if not parts:
-                continue
-            if len(parts) < 3:
+    text = BoundedReader(scan_root or path.parent).read(path)
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.rstrip("\r\n")
+        # PostgreSQL joins even comments and quoted strings before parsing.
+        # Reject this form until that preprocessing is supported, rather
+        # than misinterpret a commented continuation as a new record.
+        if line.endswith("\\"):
+            raise ValueError("unsupported pg_hba continuation")
+        line = line[: _hba_comment_start(line)]
+        parts = _hba_tokens(line)
+        if not parts:
+            continue
+        if len(parts) < 3:
+            raise ValueError("invalid pg_hba record")
+
+        conn_type = parts[0]
+        database = parts[1]
+        user = parts[2]
+
+        if conn_type == "local":
+            if len(parts) < 4:
                 raise ValueError("invalid pg_hba record")
-
-            conn_type = parts[0]
-            database = parts[1]
-            user = parts[2]
-
-            if conn_type == "local":
-                if len(parts) < 4:
+            address = None
+            method = parts[3] if len(parts) > 3 else ""
+            options = parts[4:]
+        else:
+            if conn_type not in {"host", "hostssl", "hostnossl", "hostgssenc", "hostnogssenc"}:
+                raise ValueError("unsupported pg_hba record")
+            if len(parts) < 5:
+                raise ValueError("invalid pg_hba record")
+            # 'адрес маска' занимает два поля, метод сдвинут вправо.
+            # Иначе методом становилась маска, а 'trust' уезжал в
+            # options, и P001 не срабатывал на входе без пароля.
+            if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
+                if len(parts) < 6:
                     raise ValueError("invalid pg_hba record")
-                address = None
-                method = parts[3] if len(parts) > 3 else ""
-                options = parts[4:]
+                address = f"{parts[3]} {parts[4]}"
+                method = parts[5]
+                options = parts[6:]
             else:
-                if conn_type not in {"host", "hostssl", "hostnossl", "hostgssenc", "hostnogssenc"}:
-                    raise ValueError("unsupported pg_hba record")
-                if len(parts) < 5:
-                    raise ValueError("invalid pg_hba record")
-                # 'адрес маска' занимает два поля, метод сдвинут вправо.
-                # Иначе методом становилась маска, а 'trust' уезжал в
-                # options, и P001 не срабатывал на входе без пароля.
-                if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
-                    if len(parts) < 6:
-                        raise ValueError("invalid pg_hba record")
-                    address = f"{parts[3]} {parts[4]}"
-                    method = parts[5]
-                    options = parts[6:]
-                else:
-                    address = parts[3]
-                    method = parts[4]
-                    options = parts[5:]
+                address = parts[3]
+                method = parts[4]
+                options = parts[5:]
 
-            if method not in _HBA_METHODS:
-                raise ValueError("unsupported pg_hba authentication method")
-            records.append(
-                {
-                    "type": conn_type,
-                    "database": database,
-                    "user": user,
-                    "address": address,
-                    "method": method,
-                    "options": options,
-                    "raw": line,
-                    "line": lineno,
-                }
-            )
+        if method not in _HBA_METHODS:
+            raise ValueError("unsupported pg_hba authentication method")
+        records.append(
+            {
+                "type": conn_type,
+                "database": database,
+                "user": user,
+                "address": address,
+                "method": method,
+                "options": options,
+                "raw": line,
+                "line": lineno,
+            }
+        )
     return records

@@ -5,6 +5,8 @@ from typing import Any
 
 import yaml
 
+from .base import BoundedReader
+
 # Файл с именем docker-compose.yml, где нет ни одного из этих ключей, —
 # формат v1: сервисы лежат прямо в корне. Разбирать его как современный
 # значит выдать «нарушений не найдено» на непроверенном файле.
@@ -261,16 +263,9 @@ def _guard_schema(data: dict[str, Any]) -> None:
     )
 
 
-def parse_compose(path: Path) -> ComposeFile:
+def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
     """Разбирает docker-compose.yml в ComposeFile (dict + номера строк)."""
-    with path.open("rb") as source:
-        raw = source.read(MAX_FILE_BYTES + 1)
-    if len(raw) > MAX_FILE_BYTES:
-        raise ValueError("YAML resource limit exceeded")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid YAML encoding") from None
+    text = BoundedReader(scan_root or path.parent, max_bytes=MAX_FILE_BYTES).read(path)
 
     try:
         loader = _BoundedLoader(text)

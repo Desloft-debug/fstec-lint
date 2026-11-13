@@ -28,7 +28,7 @@ python3 -m venv .venv
 
 Для адресных регрессий запустите `.venv/bin/python -m pytest tests/test_output_privacy.py tests/test_input_boundaries.py tests/test_resource_limits.py`; в Windows используйте `.venv\Scripts\python.exe`. Бюджеты и переход HBA описаны в [security.md](security.md).
 
-Проверки интеграционных замечаний: `.venv/bin/python -m pytest tests/test_product_acceptance.py -q`. В текущем кандидате они не все проходят; результат зависит от проверяемого снимка и не заменяет полный набор. Для Windows замените путь к интерпретатору на `.venv\Scripts\python.exe` и задайте новую уникальную папку `--basetemp` внутри разрешённого Temp.
+Проверки интеграционных замечаний: `.venv/bin/python -m pytest tests/test_product_acceptance.py -q`. Результат зависит от проверяемого снимка и не заменяет полный набор; актуальный локальный прогон указан в verification.md. Для Windows замените путь к интерпретатору на `.venv\Scripts\python.exe` и задайте новую уникальную папку `--basetemp` внутри разрешённого Temp.
 
 Для проверки Include и открытых ограничений отдельно запускайте `python -m pytest tests/test_include_acceptance.py tests/future_feature_contracts.py`; второй файл содержит ещё не реализованные сценарии и не входит в обычный сбор `tests/`. Текущие результаты приведены в verification.md.
 

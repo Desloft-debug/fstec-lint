@@ -479,7 +479,15 @@ def _run_registry(
         try:
             if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
                 raise ValueError("path outside scan root")
-            data = parse(path)
+            data: Any
+            if parse is parse_compose:
+                data = parse_compose(path, scan_root=boundary)
+            elif parse is parse_pg_hba:
+                data = parse_pg_hba(path, scan_root=boundary)
+            elif parse is parse_dockerfile:
+                data = parse_dockerfile(path, scan_root=boundary)
+            else:
+                data = parse(path)
             if isinstance(data, NginxConfig):
                 included.update(Path(p) for p in data.comment_offsets)
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше

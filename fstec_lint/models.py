@@ -83,4 +83,5 @@ class Finding:
         Ни detail, ни line не входят: текст меняется при правках
         формулировок, номер строки — при вставке выше по файлу.
         """
-        return f"{self.rule.id}|{self.relative_file()}|{self.location}"
+        file = self.relative_file().replace("\\", "/")
+        return f"{self.rule.id}|{file}|{self.location}"

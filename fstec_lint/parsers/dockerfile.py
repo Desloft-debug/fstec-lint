@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .base import BoundedReader
+
 # Оператор heredoc, но не here-string '<<<': в 'grep x <<<"payload"'
 # начала heredoc нет, а тег там всё равно вычитывался.
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -36,7 +38,7 @@ def _heredoc_body(lines: list[str], index: int, buffer: str) -> tuple[list[str],
     return body, cursor
 
 
-def parse_dockerfile(path: Path) -> list[dict]:
+def parse_dockerfile(path: Path, scan_root: Path | None = None) -> list[dict]:
     """Разбирает Dockerfile в список {instruction, args, line}.
 
     Тело heredoc приклеивается к args, а не разбирается как отдельные
@@ -44,7 +46,7 @@ def parse_dockerfile(path: Path) -> list[dict]:
     внутри heredoc — несуществующим переключением пользователя.
     """
     instructions: list[dict] = []
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = BoundedReader(scan_root or path.parent).read(path).splitlines()
 
     index = 0
     while index < len(lines):

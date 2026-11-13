@@ -17,6 +17,7 @@ from fstec_lint.engine import scan
     [
         ("compose.yaml", "services: {app: {privileged: true}}\n", "C002"),
         ("Dockerfile", "FROM alpine:3.20\nUSER root\n", "D001"),
+        ("pg_hba.conf", "host all all 0.0.0.0/0 trust\n", "P001"),
     ],
 )
 def test_scan_rejects_external_opened_object_before_read(

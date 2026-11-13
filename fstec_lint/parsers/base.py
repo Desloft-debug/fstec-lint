@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import BinaryIO
 
@@ -13,7 +14,7 @@ def _opened_path(source: BinaryIO) -> Path:
     """Identify the opened object before reading, or fail closed."""
     if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
         raise ValueError("configuration is not a regular file")
-    if os.name == "nt":
+    if sys.platform == "win32":
         import ctypes
         import msvcrt
         from ctypes import wintypes
@@ -59,8 +60,11 @@ class SourceLine(int):
 class BoundedReader:
     """Bound reads to root, including validation of the opened handle."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, max_bytes: int = 8 * 1024 * 1024) -> None:
+        if max_bytes < 0:
+            raise ValueError("negative read limit")
         self.root = root.resolve(strict=True)
+        self.max_bytes = max_bytes
         self.files = 0
         self.size = 0
         self.work = 0
@@ -83,14 +87,14 @@ class BoundedReader:
         with resolved.open("rb") as source:
             if not _opened_path(source).is_relative_to(self.root):
                 raise ValueError("opened file outside scan root")
-            raw = source.read(8 * 1024 * 1024 - self.size + 1)
+            raw = source.read(self.max_bytes - self.size + 1)
         self.size += len(raw)
-        if self.size > 8 * 1024 * 1024:
+        if self.size > self.max_bytes:
             raise ValueError("include resource limit exceeded")
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
-            raise ValueError("invalid configuration encoding") from None
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid configuration encoding") from None
 
     def expand(self, pattern: str, base: Path) -> list[Path]:
         path = Path(pattern)

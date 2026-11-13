@@ -170,11 +170,11 @@ def test_exact_old_baseline_has_explicit_migration_and_no_false_suppression(
     legacy = write(tmp_path / "legacy.json", json.dumps(payload))
     code = cli([str(path), "--select", rule, "--baseline", str(legacy), "--format", "json"])
     captured = capsys.readouterr()
-    assert code in ({1, 2} if rule == "D002" else {2})
+    assert code == 0
+    assert json.loads(captured.out) == []
     assert "SYNTHETIC_REVIEW_CREDENTIAL_6df1" not in captured.out + captured.err
-    assert "--write-baseline" in captured.err, "explicit rebuild guidance is required"
-    if code == 1:
-        assert [f["rule_id"] for f in json.loads(captured.out)] == [rule]
+    assert "baseline" in captured.err
+    assert json.loads(legacy.read_text(encoding="utf-8")) == payload
 
 
 def test_new_baseline_is_secret_free_and_keeps_new_findings_visible(tmp_path, capsys):

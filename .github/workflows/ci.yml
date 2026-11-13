@@ -62,7 +62,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      TEMP: ${{ github.workspace }}/.pytest-tmp
+      TMP: ${{ github.workspace }}/.pytest-tmp
+      TMPDIR: ${{ github.workspace }}/.pytest-tmp
+      PYTEST_DEBUG_TEMPROOT: ${{ github.workspace }}/.pytest-tmp
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
@@ -70,6 +76,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Prepare test temporary directory
+        run: mkdir -p "$PYTEST_DEBUG_TEMPROOT"
       - run: pip install -e ".[dev]" -c constraints.txt
       - run: pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 

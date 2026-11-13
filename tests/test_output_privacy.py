@@ -232,7 +232,7 @@ def test_hba_distinguishes_records_and_exact_duplicates(tmp_path, method, rule_i
 
 @pytest.mark.parametrize("method,rule_id", [("ldap", "P002"), ("trust", "P001")])
 @pytest.mark.parametrize("surface", ["api", "cli"])
-def test_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, rule_id, surface):
+def test_legacy_hba_migration_requires_selected_source(tmp_path, capsys, method, rule_id, surface):
     path, _, line = _case(tmp_path, "hba-" + method)
     findings = _findings(path, rule_id, line)
     saved = tmp_path / "legacy-v3.json"
@@ -280,13 +280,11 @@ def test_legacy_hba_requires_explicit_recreation(tmp_path, capsys, method, rule_
         ]
     )
     captured = capsys.readouterr()
-    assert code in (1, 2), "legacy data must not hide the finding and return success"
+    assert code == 0, "an exact verified legacy match is known debt"
+    assert json.loads(captured.out) == []
     assert "baseline" in captured.err.lower()
-    assert "--write-baseline" in captured.err, "require actionable explicit regeneration"
     assert MARKER not in captured.out + captured.err
     assert "Traceback" not in captured.err
-    if code == 1:
-        _report_contract(captured.out, "json", path, rule_id, line)
     assert saved.read_bytes() == original
 
 

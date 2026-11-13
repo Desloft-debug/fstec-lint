@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline",
         metavar="FILE",
-        help="подавить совпадающие находки из baseline; D002/D005 не подавляются",
+        help="подавить совпадающие находки из baseline",
     )
     parser.add_argument(
         "--write-baseline",
@@ -224,7 +224,11 @@ def _run(argv: list[str] | None) -> int:
 
     if args.baseline:
         try:
-            known = baseline_module.load(Path(args.baseline))
+            known = baseline_module.load(
+                Path(args.baseline),
+                findings=findings if not result.errors else None,
+                scan_root=root.resolve().parent if root.is_file() else root.resolve(),
+            )
         except baseline_module.BaselineError as exc:
             raise UsageError(str(exc)) from exc
         findings, suppressed = baseline_module.apply(findings, known)

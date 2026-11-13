@@ -303,7 +303,8 @@ def _exception(kind):
 def test_parser_exception_payload_is_not_diagnostic(tmp_path, monkeypatch, capsys, fmt, kind):
     target = _write(tmp_path / "compose.yaml")
 
-    def failed_parser(_):
+    def failed_parser(_, *, scan_root=None):
+        assert scan_root == tmp_path.resolve()
         raise _exception(kind)
 
     monkeypatch.setattr(engine, "parse_compose", failed_parser)
@@ -366,7 +367,8 @@ def test_legacy_error_lookalike_cannot_echo_payload(tmp_path, monkeypatch, capsy
     class LegacyLookalike(ValueError):
         pass
 
-    def failed_parser(_):
+    def failed_parser(_, *, scan_root=None):
+        assert scan_root == tmp_path.resolve()
         if kind == "subclass":
             raise LegacyLookalike(known_text)
         raise ValueError(

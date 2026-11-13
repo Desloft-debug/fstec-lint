@@ -2,6 +2,14 @@
 
 Для локальной проверки используйте команды из [раздела разработки](development.md). Обязательны Ruff, Mypy, pytest с покрытием не ниже 90%, аудит зависимостей, проверка сборки и установки, а также CI на Linux с Python 3.10–3.12 и проверка Action на ревизии кандидата. Результаты конкретного запуска относятся только к проверенному снимку; hosted CI и независимая приёмка должны быть подтверждены перед выпуском.
 
+## Исправления CI и baseline — 13 ноября 2026
+
+Локально, Windows / Python 3.10.11: `pytest tests -q -p no:cacheprovider --cov=fstec_lint --cov-report=term-missing` — **1496 passed, 86 skipped**, без падений, покрытие **94,41%**. Перед запуском TEMP, TMP, TMPDIR и PYTEST_DEBUG_TEMPROOT указывали на один новый временный каталог. Добавлены 11 регрессионных случаев для идентичности Docker-команд, точной миграции baseline и чтения HBA.
+
+Ruff и проверка форматирования прошли. Mypy прошёл с `--platform linux` и `--platform win32`; это статические проверки на Windows, а не выполнение тестов под Linux. Сборка sdist/wheel через `python -m build --no-isolation` прошла; установленный wheel загрузил 56 правил и дал ожидаемые коды 0/1 на защищённом/уязвимом примерах. `pip-audit --strict --disable-pip --no-deps -r constraints.txt` не обнаружил известных уязвимостей в перечисленных закреплённых версиях; транзитивные зависимости этим запуском не проверялись.
+
+Полный Linux-прогон Python 3.10–3.12 и hosted Action должны подтвердиться в CI после отправки коммита. Результаты ниже относятся к предыдущим снимкам и не описывают текущий локальный прогон.
+
 ## Проверка чтения файлов
 
 Windows Python 3.12: адресная выборка `python -m pytest tests/ -q -p no:cacheprovider -k "handle_containment or postgresql_include or postgresql_boundaries or regressions or sshd_include or boundaries"` — 82 passed. Проверка `test_atomic_read_never_consumes_external_bytes` — 6 passed, 2 failed: в двух вариантах main имя `value.conf` не выбирается для PostgreSQL, а подмена срабатывает на контрольном чтении самого теста. Новый тест проверяет реальный основной анализ `postgresql.conf`. Ruff на двух изменённых исходниках и Mypy на `fstec_lint` прошли. Полный набор, Linux и независимая проверка этого кандидата не выполнялись; безопасность от всех гонок, Docker/HBA baseline и Compose merge остаются открытыми.

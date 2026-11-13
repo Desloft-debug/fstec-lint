@@ -17,3 +17,5 @@ htmlcov/
 .ruff_cache/
 coverage.xml
 fstec-lint-1.1.0/
+
+.pytest-tmp/
