@@ -23,7 +23,7 @@ def _logical_lines(raw_lines: list[str]) -> list[tuple[int, str]]:
     start = 0
     for lineno, raw in enumerate(raw_lines, start=1):
         stripped = raw.strip()
-        if not buffer and (not stripped or stripped.startswith(COMMENT_PREFIXES)):
+        if not stripped or stripped.startswith(COMMENT_PREFIXES):
             continue
         if not buffer:
             start = lineno
@@ -33,7 +33,7 @@ def _logical_lines(raw_lines: list[str]) -> list[tuple[int, str]]:
         logical.append((start, buffer + stripped))
         buffer = ""
     if buffer:
-        logical.append((start, buffer.strip()))
+        raise ValueError("incomplete systemd continuation")
     return logical
 
 

@@ -1,0 +1,215 @@
+{
+  "scenarios": [
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "commented_stig.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "correct_cis.pass.sh",
+      "outcome": "skipped",
+      "reason": "порог профиля 365 дней больше порога fstec-lint"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "correct_stig.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "correct_stig_double.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "incorrect_cis.fail.sh",
+      "outcome": "skipped",
+      "reason": "порог профиля 365 дней больше порога fstec-lint"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "incorrect_stig.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_maximum_age_login_defs",
+      "rule": "A001",
+      "scenario": "incorrect_stig_double.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "commented.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "conflicting_values.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "conflicting_values_directory.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "correct_value.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "correct_value_directory.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "duplicated_values.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "wrong_value.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minlen",
+      "rule": "A002",
+      "scenario": "wrong_value_directory.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "commented.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "conflicting_values.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "conflicting_values_directory.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "correct_value.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "correct_value_directory.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "duplicated_values.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "wrong_value.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "accounts_password_pam_minclass",
+      "rule": "A002",
+      "scenario": "wrong_value_directory.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "line_commented.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "line_not_there.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "remote_configured.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "remote_configured_rainer.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "remote_configured_rainer_multiline.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "rsyslog_remote_loghost",
+      "rule": "R001",
+      "scenario": "remote_configured_rainer_multiline_azuremonitoragent.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "account_disable_post_pw_expiration",
+      "rule": "A003",
+      "scenario": "comment.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "account_disable_post_pw_expiration",
+      "rule": "A003",
+      "scenario": "correct_value.pass.sh",
+      "outcome": "tn"
+    },
+    {
+      "cac_rule": "account_disable_post_pw_expiration",
+      "rule": "A003",
+      "scenario": "disabled.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "account_disable_post_pw_expiration",
+      "rule": "A003",
+      "scenario": "line_not_there.fail.sh",
+      "outcome": "tp"
+    },
+    {
+      "cac_rule": "account_disable_post_pw_expiration",
+      "rule": "A003",
+      "scenario": "wrong_value.fail.sh",
+      "outcome": "tp"
+    }
+  ],
+  "totals": {
+    "tp": 19,
+    "skipped": 2,
+    "tn": 13
+  }
+}

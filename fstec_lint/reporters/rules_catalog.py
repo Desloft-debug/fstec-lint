@@ -18,6 +18,13 @@ TARGET_LABELS = {
     "pg_hba": "pg_hba.conf",
     "sshd_config": "sshd_config",
     "systemd_unit": "*.service (systemd)",
+    "dotenv": ".env / .env.* / *.env (переменные окружения)",
+    "login_defs": "shadow-utils (параметры учётных записей, login.defs)",
+    "pwquality": "libpwquality (требования к паролям, pwquality.conf)",
+    "rsyslog": "rsyslog (служба регистрации событий)",
+    "nginx": "nginx (веб-сервер)",
+    "useradd_defaults": "shadow-utils (параметры новых учётных записей, useradd)",
+    "postfix_main": "Postfix (почтовый сервер)",
 }
 
 SEVERITY_LABEL = {

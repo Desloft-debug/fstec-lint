@@ -6,8 +6,9 @@ def test_permit_root_login_yes_flagged():
     assert len(sc.check_permit_root_login({"permitrootlogin": "yes"})) == 1
 
 
-def test_permit_root_login_without_password_flagged():
-    assert len(sc.check_permit_root_login({"permitrootlogin": "without-password"})) == 1
+def test_permit_root_login_without_password_matches_policy():
+    # public-key-only root login aliases are treated identically.
+    assert sc.check_permit_root_login({"permitrootlogin": "without-password"}) == []
 
 
 def test_permit_root_login_no_ok():

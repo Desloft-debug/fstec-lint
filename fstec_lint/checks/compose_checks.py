@@ -22,7 +22,7 @@ SECRET_KEY_RE = re.compile(
 DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "ALL", "SYS_PTRACE", "SYS_MODULE"}
 SAFE_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 DOCKER_API_PORTS = {"2375", "2376"}
-SENSITIVE_HOST_MOUNTS = {"/", "/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
+SENSITIVE_HOST_MOUNTS = {"/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
 DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
 DEBUG_TRUTHY = {"1", "true", "yes", "on"}
 # ${DB_PASSWORD:-changeme} — подстановка со значением по умолчанию:
@@ -187,13 +187,15 @@ def check_dangerous_capabilities(compose: dict) -> CheckResults:
             continue
         caps = as_list(svc.get("cap_add"))
         bad = [str(c) for c in caps if str(c).upper() in DANGEROUS_CAPS]
-        if bad:
+        missing_drop = not any(str(c).upper() == "ALL" for c in as_list(svc.get("cap_drop")))
+        if bad or missing_drop:
+            detail = []
+            if bad:
+                detail.append(f"добавлены опасные capabilities: {', '.join(bad)}")
+            if missing_drop:
+                detail.append("cap_drop не содержит ALL")
             findings.append(
-                (
-                    f"service:{name}",
-                    f"добавлены опасные capabilities: {', '.join(bad)}",
-                    _line(compose, name, "cap_add"),
-                )
+                (f"service:{name}", "; ".join(detail), _line(compose, name, "cap_add", "cap_drop"))
             )
     return findings
 
@@ -400,7 +402,11 @@ def check_missing_no_new_privileges(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         sec_opt = as_list(svc.get("security_opt"))
-        if not any("no-new-privileges" in str(opt) for opt in sec_opt):
+        enabled = any(
+            re.fullmatch(r"no-new-privileges(?:\s*[:=]\s*(?:true|1))?", str(opt).strip(), re.I)
+            for opt in sec_opt
+        )
+        if not enabled:
             findings.append(
                 (
                     f"service:{name}",
@@ -433,16 +439,36 @@ def check_missing_resource_limits(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
-        has_legacy_limits = "mem_limit" in svc or "cpus" in svc
         deploy = svc.get("deploy")
-        has_deploy_limits = bool(
-            isinstance(deploy, dict) and (deploy.get("resources") or {}).get("limits")
+        resources = deploy.get("resources", {}) if isinstance(deploy, dict) else {}
+        limits = resources.get("limits", {}) if isinstance(resources, dict) else {}
+        limits = limits if isinstance(limits, dict) else {}
+
+        def positive(value: object, memory: bool = False) -> bool:
+            if isinstance(value, bool) or value is None:
+                return False
+            text = str(value).strip()
+            pattern = (
+                r"(?:[0-9]+(?:\.[0-9]+)?)(?:[kKmMgGtT](?:[bB])?)?"
+                if memory
+                else r"[0-9]+(?:\.[0-9]+)?"
+            )
+            if not re.fullmatch(pattern, text):
+                return False
+            number = re.match(r"[0-9]+(?:\.[0-9]+)?", text)
+            return number is not None and float(number.group()) > 0
+
+        cpu = (
+            positive(svc.get("cpus"))
+            or positive(svc.get("cpu_quota"))
+            or positive(limits.get("cpus"))
         )
-        if not has_legacy_limits and not has_deploy_limits:
+        memory = positive(svc.get("mem_limit"), True) or positive(limits.get("memory"), True)
+        if not (cpu and memory):
             findings.append(
                 (
                     f"service:{name}",
-                    "не заданы ограничения ресурсов (mem_limit/cpus или "
+                    "неполные или некорректные ограничения ресурсов (mem_limit/cpus или "
                     "deploy.resources.limits) — один контейнер может исчерпать ресурсы хоста",
                     _line(compose, name, "deploy", "mem_limit", "cpus"),
                 )
@@ -456,7 +482,12 @@ def check_missing_healthcheck(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         healthcheck = svc.get("healthcheck")
-        if not healthcheck or (isinstance(healthcheck, dict) and healthcheck.get("disable")):
+        test = healthcheck.get("test") if isinstance(healthcheck, dict) else None
+        disabled = isinstance(healthcheck, dict) and healthcheck.get("disable") is True
+        none_test = (isinstance(test, list) and bool(test) and str(test[0]).upper() == "NONE") or (
+            isinstance(test, str) and test.strip().upper() == "NONE"
+        )
+        if not healthcheck or disabled or none_test:
             findings.append(
                 (
                     f"service:{name}",
@@ -487,20 +518,42 @@ def check_debug_mode_enabled(compose: dict) -> CheckResults:
 
 
 def check_sensitive_host_mount(compose: dict) -> CheckResults:
-    findings = []
+    import posixpath
+
+    findings: list[CheckResult] = []
+    volumes = compose.get("volumes", {})
+    volumes = volumes if isinstance(volumes, dict) else {}
     for name, svc in _services(compose).items():
-        if not isinstance(svc, dict):
-            continue
         for vol in as_list(svc.get("volumes")):
+            source = ""
             if isinstance(vol, dict):
-                source_path = str(vol.get("source", ""))
-            else:
-                source_path = str(vol).split(":")[0]
-            if source_path in SENSITIVE_HOST_MOUNTS:
+                source = str(vol.get("source") or vol.get("src") or "")
+                if vol.get("type") not in (None, "bind", "volume"):
+                    continue
+                if vol.get("type") != "bind" and not source.startswith("/"):
+                    definition = volumes.get(source, {})
+                    opts = definition.get("driver_opts", {}) if isinstance(definition, dict) else {}
+                    source = (
+                        str(opts.get("device") or opts.get("mountpoint") or "")
+                        if isinstance(opts, dict)
+                        else ""
+                    )
+            elif isinstance(vol, str) and ":" in vol:
+                source = vol.split(":", 1)[0]
+                definition = volumes.get(source, {})
+                opts = definition.get("driver_opts", {}) if isinstance(definition, dict) else {}
+                if isinstance(opts, dict) and (opts.get("device") or opts.get("mountpoint")):
+                    source = str(opts.get("device") or opts.get("mountpoint"))
+            if not source.startswith("/"):
+                continue
+            path = posixpath.normpath(source)
+            if path == "/" or any(
+                path == root or path.startswith(root + "/") for root in SENSITIVE_HOST_MOUNTS
+            ):
                 findings.append(
                     (
                         f"service:{name}",
-                        f"смонтирован чувствительный путь хоста '{source_path}' внутрь контейнера",
+                        "смонтирован чувствительный путь хоста",
                         _line(compose, name, "volumes"),
                     )
                 )
@@ -518,6 +571,23 @@ def check_flat_network(compose: dict) -> CheckResults:
         for name, svc in services.items()
         if isinstance(svc, dict) and svc.get("network_mode") != "host"
     ]
+
+
+def check_logs_not_centralized(compose: dict) -> CheckResults:
+    findings: list[CheckResult] = []
+    for name, svc in _services(compose).items():
+        logging = svc.get("logging")
+        driver = logging.get("driver") if isinstance(logging, dict) else None
+        if driver is None or str(driver).strip().lower() in {"json-file", "local", "none"}:
+            findings.append(
+                (
+                    f"service:{name}",
+                    "централизованный сбор не указан в Compose; "
+                    "настройки демона и внешние сборщики не проверены",
+                    _line(compose, name, "logging"),
+                )
+            )
+    return findings
 
 
 ComposeCheck = Callable[[dict], CheckResults]
@@ -545,6 +615,7 @@ def _service_scope(check: ComposeCheck) -> ComposeCheck:
 
 
 REGISTRY = {
+    "C017": _service_scope(check_logs_not_centralized),
     "C001": _service_scope(check_root_user),
     "C002": _service_scope(check_privileged),
     "C003": _service_scope(check_dangerous_capabilities),

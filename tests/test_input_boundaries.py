@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from integration_helpers import displayed_path
 
 from fstec_lint.cli import main
 from fstec_lint.engine import scan
@@ -26,7 +27,7 @@ def _link(link, target, directory=False):
         pytest.skip(f"unprivileged symlink unavailable: {type(error).__name__}: {error}")
 
 
-def test_s02_environment_tmp_path_uses_current_temp(tmp_path):
+def test_environment_tmp_path_uses_current_temp(tmp_path):
     expected = Path(os.environ["TEMP"]).resolve()
     for variable in ("TMP", "TMPDIR", "PYTEST_DEBUG_TEMPROOT"):
         assert Path(os.environ[variable]).resolve() == expected
@@ -38,7 +39,7 @@ def test_s02_environment_tmp_path_uses_current_temp(tmp_path):
 
 @pytest.mark.parametrize("production_only", [False, True])
 @pytest.mark.parametrize("surface", ["api", "io", "cli"])
-def test_s02_recursive_external_file_link_is_not_read(
+def test_recursive_external_file_link_is_not_read(
     tmp_path, monkeypatch, capsys, production_only, surface
 ):
     root = tmp_path / "selected"
@@ -81,12 +82,12 @@ def test_s02_recursive_external_file_link_is_not_read(
         assert "Traceback" not in captured.err
         entries = json.loads(captured.out)
         assert len(entries) == 1 and entries[0]["rule_id"] == "C002"
-        assert entries[0]["file"] == str(local.relative_to(Path.cwd()))
+        assert entries[0]["file"] == displayed_path(local)
         assert entries[0]["line"] == 3
 
 
 @pytest.mark.parametrize("explicit", ["target-file", "file-link", "target-root", "directory-link"])
-def test_s02_explicit_user_path_may_select_external_tree(tmp_path, explicit):
+def test_explicit_user_path_may_select_external_tree(tmp_path, explicit):
     outside = _write(tmp_path / "outside" / "compose.yaml")
     selected = tmp_path / "selected"
     selected.mkdir()
@@ -108,7 +109,7 @@ def test_s02_explicit_user_path_may_select_external_tree(tmp_path, explicit):
     assert Path(finding.file).resolve() == outside.resolve()
 
 
-def test_s02_recursive_external_directory_link_is_not_followed(tmp_path):
+def test_recursive_external_directory_link_is_not_followed(tmp_path):
     root = tmp_path / "selected"
     local = _write(root / "compose.yaml")
     outside = _write(tmp_path / "outside" / "compose.yaml")
@@ -117,7 +118,7 @@ def test_s02_recursive_external_directory_link_is_not_followed(tmp_path):
     assert [(f.rule.id, f.file, f.line) for f in result.findings] == [("C002", str(local), 3)]
 
 
-def test_s02_contained_file_link_keeps_useful_scan(tmp_path):
+def test_contained_file_link_keeps_useful_scan(tmp_path):
     target = _write(tmp_path / "data" / "safe.txt")
     link = tmp_path / "compose.yaml"
     _link(link, target)
@@ -128,7 +129,7 @@ def test_s02_contained_file_link_keeps_useful_scan(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
-def test_s02_recursive_external_junction_is_not_followed(tmp_path):
+def test_recursive_external_junction_is_not_followed(tmp_path):
     root = tmp_path / "selected"
     local = _write(root / "compose.yaml")
     outside = _write(tmp_path / "outside" / "compose.yaml")
@@ -139,12 +140,15 @@ def test_s02_recursive_external_junction_is_not_followed(tmp_path):
             "-NoProfile",
             "-NonInteractive",
             "-Command",
+            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
             "$ErrorActionPreference='Stop'; New-Item -ItemType Junction "
-            "-Path $env:S02_JUNCTION -Target $env:S02_TARGET | Out-Null",
+            "-Path $env:TEST_JUNCTION -Target $env:TEST_TARGET | Out-Null",
         ],
-        env={**os.environ, "S02_JUNCTION": str(junction), "S02_TARGET": str(outside.parent)},
+        env={**os.environ, "TEST_JUNCTION": str(junction), "TEST_TARGET": str(outside.parent)},
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="strict",
         timeout=15,
     )
     if process.returncode:

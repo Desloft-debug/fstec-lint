@@ -13,10 +13,10 @@ import sys
 import threading
 from ctypes import wintypes
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 import yaml
+from integration_helpers import displayed_uri
 
 from fstec_lint import baseline
 from fstec_lint.checks import compose_checks as checks
@@ -436,7 +436,7 @@ def test_real_cli_alias_failure_is_private_and_never_clean(
             findings = json.loads(out)["runs"][0]["results"]
             assert len(findings) == 1 and findings[0]["ruleId"] == "C002"
             location = findings[0]["locations"][0]["physicalLocation"]
-            reported_file = str((good / "compose.yaml").relative_to(Path.cwd()))
+            reported_file = displayed_uri(good / "compose.yaml")
             assert location["artifactLocation"]["uri"] == reported_file
             assert location["region"]["startLine"] == 3
         else:

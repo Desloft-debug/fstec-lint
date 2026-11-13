@@ -26,6 +26,8 @@ def test_filter_rules_select_and_ignore():
         "S004",
         "S005",
         "S006",
+        "S007",
+        "S008",
     }
     assert "C001" not in {r.id for r in filter_rules(rules, ignore=["c001"])}
 

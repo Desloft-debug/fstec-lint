@@ -1,0 +1,551 @@
+{
+  "scenarios": [
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "comment.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "correct_value.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "correct_value_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "duplicated_param.pass.sh",
+      "class": "conflict",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "duplicated_param_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "line_not_there.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "param_conflict.fail.sh",
+      "class": "conflict",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "param_conflict_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "param_conflict_file_with_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "wrong_value.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_root_login",
+      "rule": "S001",
+      "match": "partial",
+      "scenario": "wrong_value_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "comment.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "correct_value.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "correct_value_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "duplicated_param.pass.sh",
+      "class": "conflict",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "duplicated_param_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "line_not_there.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "param_conflict.fail.sh",
+      "class": "conflict",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "param_conflict_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "param_conflict_file_with_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "wrong_value.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_empty_passwords",
+      "rule": "S003",
+      "match": "full",
+      "scenario": "wrong_value_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "comment.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "correct_value.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "correct_value_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "duplicated_param.pass.sh",
+      "class": "conflict",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "duplicated_param_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "line_not_there.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "param_conflict.fail.sh",
+      "class": "conflict",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "param_conflict_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "param_conflict_file_with_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "wrong_value.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_allow_only_protocol2",
+      "rule": "S004",
+      "match": "full",
+      "scenario": "wrong_value_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "comment.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "correct_value.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "correct_value_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "duplicated_param.pass.sh",
+      "class": "conflict",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "duplicated_param_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "line_not_there.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "param_conflict.fail.sh",
+      "class": "conflict",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "param_conflict_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "param_conflict_file_with_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "wrong_value.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_disable_x11_forwarding",
+      "rule": "S005",
+      "match": "full",
+      "scenario": "wrong_value_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_set_max_auth_tries",
+      "rule": "S006",
+      "match": "full",
+      "scenario": "correct_value_equals.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_max_auth_tries",
+      "rule": "S006",
+      "match": "full",
+      "scenario": "correct_value_less_than.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_max_auth_tries",
+      "rule": "S006",
+      "match": "full",
+      "scenario": "wrong_value_less_than_0.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_max_auth_tries",
+      "rule": "S006",
+      "match": "full",
+      "scenario": "wrong_value_more_than.fail.sh",
+      "class": "value",
+      "outcome": "tp",
+      "sshd_outcome": "tp"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "comment.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "correct_value.pass.sh",
+      "class": "value",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "correct_value_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "duplicated_param.pass.sh",
+      "class": "conflict",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "duplicated_param_directory.pass.sh",
+      "class": "directory",
+      "outcome": "tn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "line_not_there.fail.sh",
+      "class": "missing",
+      "outcome": "fn",
+      "sshd_outcome": "tn"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "param_conflict.fail.sh",
+      "class": "conflict",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "param_conflict_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "param_conflict_file_with_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "wrong_value.fail.sh",
+      "class": "value",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    },
+    {
+      "cac_rule": "sshd_set_loglevel_info",
+      "rule": "S008",
+      "match": "partial",
+      "scenario": "wrong_value_directory.fail.sh",
+      "class": "directory",
+      "outcome": "fn",
+      "sshd_outcome": "invalid"
+    }
+  ],
+  "totals": {
+    "cac:fn": 36,
+    "cac:missing:fn": 10,
+    "sshd:tn": 38,
+    "cac:tn": 22,
+    "cac:value:tn": 7,
+    "cac:directory:tn": 10,
+    "cac:conflict:tn": 5,
+    "cac:conflict:fn": 5,
+    "sshd:invalid": 20,
+    "cac:directory:fn": 15,
+    "cac:value:fn": 6,
+    "cac:tp": 1,
+    "cac:value:tp": 1,
+    "sshd:tp": 1
+  }
+}

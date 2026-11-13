@@ -260,7 +260,7 @@ def test_baseline_directory_is_usage_error(tmp_path, capsys):
 
 @pytest.mark.parametrize("kind", ["deep_document", "deep_entry", "large_integer"])
 @pytest.mark.parametrize("surface", ["api", "cli"])
-def test_s07_baseline_resource_errors_are_usage_errors(tmp_path, kind, surface):
+def test_baseline_resource_errors_are_usage_errors(tmp_path, kind, surface):
     if kind == "large_integer":
         text = '{"note":"' + DIAGNOSTIC_SENTINEL + '","version":' + "9" * 5000 + "}"
     else:
@@ -297,7 +297,7 @@ def test_s07_baseline_resource_errors_are_usage_errors(tmp_path, kind, surface):
         assert "9" * 100 not in p.stderr
 
 
-def test_s07_baseline_fingerprint_recursion_is_safe(tmp_path, monkeypatch, capsys):
+def test_baseline_fingerprint_recursion_is_safe(tmp_path, monkeypatch, capsys):
     # Fault injection isolates the post-decode defense: the normal JSON decoder
     # rejects this depth first. Only native JSON-compatible types are injected.
     nested = DIAGNOSTIC_SENTINEL
@@ -319,7 +319,7 @@ def test_s07_baseline_fingerprint_recursion_is_safe(tmp_path, monkeypatch, capsy
     assert "Traceback" not in captured.err
 
 
-def test_s07_baseline_large_valid_v3_remains_compatible(tmp_path, capsys):
+def test_baseline_large_valid_v3_remains_compatible(tmp_path, capsys):
     entries = [
         {
             "rule_id": "C002",

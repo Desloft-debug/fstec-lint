@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from .base import ConfigMap
+from .base import BoundedReader, ConfigMap, SourceLine
 
 
 @dataclass(frozen=True)
@@ -28,30 +29,48 @@ class SshdConfig(ConfigMap):
         self.matches: list[MatchBlock] = []
 
 
-def parse_sshd_config(path: Path) -> SshdConfig:
+def parse_sshd_config(path: Path, scan_root: Path | None = None) -> SshdConfig:
     """Разбирает sshd_config: глобальные директивы + список Match-блоков.
 
     Ключи приводятся к нижнему регистру. При повторе директивы в пределах
     одной секции побеждает первое вхождение — так же ведёт себя сам sshd.
     """
     config = SshdConfig()
-    current: ConfigMap = config
+    reader = BoundedReader(scan_root if scan_root is not None else path.parent)
+    base = path.parent.resolve()
 
-    with open(path, encoding="utf-8") as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.split("#", 1)[0].strip()
-            if not line:
+    def parse_file(file: Path, current: ConfigMap, stack: tuple[Path, ...]) -> None:
+        resolved = reader.checked(file)
+        text = reader.read(resolved, stack)
+        stack = (*stack, resolved)
+        for lineno, raw_line in enumerate(text.splitlines(), start=1):
+            try:
+                words = shlex.split(raw_line, comments=True, posix=True)
+            except ValueError:
+                raise ValueError("invalid sshd configuration syntax") from None
+            if not words:
                 continue
-            parts = line.split(None, 1)
-            key = parts[0].lower()
+            key = words[0].lower()
+            mark = SourceLine(lineno, str(resolved))
             if key == "match":
-                criteria = parts[1].strip() if len(parts) > 1 else ""
-                block = MatchBlock(criteria=criteria, line=lineno, settings=ConfigMap())
+                criteria = " ".join(words[1:])
+                block = MatchBlock(criteria=criteria, line=mark, settings=ConfigMap())
                 config.matches.append(block)
                 current = block.settings
                 continue
-            if len(parts) < 2:
+            if len(words) < 2:
+                raise ValueError("invalid sshd configuration syntax")
+            if key == "maxauthtries" and (
+                len(words) != 2 or not words[1].isascii() or not words[1].isdigit()
+            ):
+                raise ValueError("invalid sshd numeric value")
+            if key == "include":
+                for pattern in words[1:]:
+                    for included in reader.expand(pattern, base):
+                        parse_file(included, current, stack)
                 continue
             if key not in current:
-                current.set(key, parts[1].strip(), lineno)
+                current.set(key, " ".join(words[1:]), mark)
+
+    parse_file(path, config, ())
     return config

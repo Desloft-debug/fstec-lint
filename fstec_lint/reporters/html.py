@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from html import escape
+from typing import TYPE_CHECKING
 
 from ..models import Finding, Severity
+from ._common import report_data
+
+if TYPE_CHECKING:
+    from ..engine import ScanResult
+
 
 SEVERITY_COLOR = {
     Severity.CRITICAL: "#b91c1c",
@@ -28,7 +34,10 @@ def _row(finding: Finding) -> str:
         </tr>"""
 
 
-def render(findings: list[Finding], title: str = "fstec-lint report") -> str:
+def render(findings: list[Finding] | ScanResult, title: str = "fstec-lint report") -> str:
+    data = report_data(findings)
+    findings = data.findings
+    notes = "".join(f"<p>{escape(note)}</p>" for note in data.notes())
     counts = {s: 0 for s in Severity}
     for finding in findings:
         counts[finding.rule.severity] += 1
@@ -67,6 +76,7 @@ def render(findings: list[Finding], title: str = "fstec-lint report") -> str:
 <body>
   <h1>{escape(title)}</h1>
   <p class="subtitle">Всего находок: {len(findings)}</p>
+  {notes}
   <div class="summary">{summary_cards}</div>
   <table>
     <thead>

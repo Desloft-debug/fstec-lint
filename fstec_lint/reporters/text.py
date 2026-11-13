@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ..models import Finding, Severity
+from ._common import report_data
+
+if TYPE_CHECKING:
+    from ..engine import ScanResult
+
 
 SEVERITY_ICON = {
     Severity.CRITICAL: "[CRIT]",
@@ -10,9 +17,11 @@ SEVERITY_ICON = {
 }
 
 
-def render(findings: list[Finding]) -> str:
+def render(findings: list[Finding] | ScanResult) -> str:
+    data = report_data(findings)
+    findings = data.findings
     if not findings:
-        return "fstec-lint: нарушений не найдено."
+        return "\n".join(["fstec-lint: нарушений не найдено.", *data.notes()])
 
     lines: list[str] = []
     counts = {s: 0 for s in Severity}
@@ -47,4 +56,4 @@ def render(findings: list[Finding]) -> str:
         if counts[severity]
     )
     lines.append(f"Итого находок: {len(findings)} ({summary})")
-    return "\n".join(lines)
+    return "\n".join([*lines, "", *data.notes()])

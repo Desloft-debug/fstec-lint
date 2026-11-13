@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .base import CheckResult, CheckResults, is_root_user
 
@@ -129,7 +131,62 @@ def _short(args: str) -> str:
 
 
 def _private_location(args: str) -> str:
-    """Identify an instruction without exposing its potentially secret arguments."""
+    """Hash command structure after removing common credential carriers.
+
+    This is an identity, not encryption. Unrecognised secret syntax must not be
+    considered protected against guessing merely because it is hashed.
+    """
+
+    def scrub_url(match: re.Match[str]) -> str:
+        try:
+            url = urlsplit(match.group())
+            return urlunsplit(
+                (
+                    url.scheme,
+                    url.netloc.rsplit("@", 1)[-1],
+                    url.path,
+                    urlencode(
+                        [
+                            (
+                                key,
+                                "<credential>"
+                                if SECRET_ARG_RE.search(key)
+                                or re.search(r"(?i)auth|signature|credential|passwd|pwd", key)
+                                else value,
+                            )
+                            for key, value in parse_qsl(url.query, keep_blank_values=True)
+                        ]
+                    ),
+                    "",
+                )
+            )
+        except ValueError:
+            return "<invalid-url>"
+
+    args = re.sub(r"https?://[^\s\"'<>]+", scrub_url, args)
+    value = r"""(?:"[^"]*"|'[^']*'|\S+)"""
+
+    def scrub_option(match: re.Match[str]) -> str:
+        flag, argument = match.group(1), match.group(2)
+        if flag.lower() in {"-h", "--header"}:
+            name, _, _ = argument.strip("\"'").partition(":")
+            if name.lower() not in {"authorization", "proxy-authorization", "cookie", "set-cookie"}:
+                if not SECRET_ARG_RE.search(name):
+                    return match.group()
+            return f"{flag} {name.lower()}:<credential>"
+        return f"{flag} <credential>"
+
+    args = re.sub(
+        r"(?i)(?<!\S)(-u|--user|--proxy-user|--password|--oauth2-bearer|-H|--header)"
+        r"(?:=|\s+)(" + value + r")",
+        scrub_option,
+        args,
+    )
+    args = re.sub(
+        r"(?i)(\b[\w-]*(?:password|secret|token|api[_-]?key|private[_-]?key)[\w-]*=)" + value,
+        r"\1<credential>",
+        args,
+    )
     return hashlib.sha256(_normalize(args).encode("utf-8")).hexdigest()
 
 
@@ -185,14 +242,17 @@ def check_missing_user(instructions: list[dict]) -> CheckResults:
 def check_add_remote_url(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
+        occurrences: dict[str, int] = defaultdict(int)
         for inst in stage.instructions:
             if inst["instruction"] != "ADD":
                 continue
+            digest = _private_location(inst["args"])
+            occurrences[digest] += 1
             first_arg = inst["args"].split()[0] if inst["args"].split() else ""
             if first_arg.startswith(("http://", "https://")):
                 findings.append(
                     (
-                        _loc(stage, f"ADD sha256:{_private_location(inst['args'])}"),
+                        _loc(stage, f"ADD sha256:{digest}:{occurrences[digest]}"),
                         "ADD — загрузка по URL без проверки контрольной суммы",
                         inst["line"],
                     )
@@ -244,13 +304,16 @@ def check_latest_base_image(instructions: list[dict]) -> CheckResults:
 def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
     findings = []
     for stage in _stages(instructions):
+        occurrences: dict[str, int] = defaultdict(int)
         for inst in stage.instructions:
             if inst["instruction"] != "RUN":
                 continue
+            digest = _private_location(inst["args"])
+            occurrences[digest] += 1
             if PIPE_TO_SHELL_RE.search(inst["args"]):
                 findings.append(
                     (
-                        _loc(stage, f"RUN sha256:{_private_location(inst['args'])}"),
+                        _loc(stage, f"RUN sha256:{digest}:{occurrences[digest]}"),
                         "RUN — вывод curl/wget передаётся напрямую в shell без проверки",
                         inst["line"],
                     )
@@ -261,8 +324,17 @@ def check_pipe_to_shell(instructions: list[dict]) -> CheckResults:
 def check_missing_healthcheck(instructions: list[dict]) -> CheckResults:
     if not instructions:
         return []
-    if any(i["instruction"] == "HEALTHCHECK" for i in instructions):
-        return []
+    stages = _build_stages(_stages(instructions))
+    stage = stages[-1] if stages else None
+    visited: set[int] = set()
+    while stage is not None and stage.index not in visited:
+        visited.add(stage.index)
+        checks = [i for i in stage.instructions if i["instruction"] == "HEALTHCHECK"]
+        if checks:
+            if checks[-1]["args"].strip().upper() != "NONE":
+                return []
+            break
+        stage = _stage_by_name(stages, stage.parent)
     return [("HEALTHCHECK", "в Dockerfile не задан HEALTHCHECK", instructions[0]["line"])]
 
 
