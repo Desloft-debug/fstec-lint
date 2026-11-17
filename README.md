@@ -5,7 +5,7 @@
 
 Статический анализатор конфигураций инфраструктуры со справочной привязкой находок к мерам защиты ФСТЭК. Проверяет файлы локально, указывает проблемные настройки и предлагает исправления. Подходит для проверки изменений в CI и подготовки материалов к аудиту.
 
-**Текущая версия в исходниках — `1.1.1.dev0`, кандидат разработки.** В каталоге **56 правил**. Это версия пакета, а не название ветки или опубликованного релиза. Требуется **Python 3.10+**; матрица CI включает Python 3.10, 3.11 и 3.12.
+**Версия пакета — `1.0.2`, исправленная сборка от 17.11.2026.** В каталоге **56 правил**. Это версия пакета, а не название ветки или опубликованного релиза. Требуется **Python 3.10+**; матрица CI включает Python 3.10, 3.11 и 3.12.
 
 Инструмент не заменяет аттестацию и не является сертифицированным средством защиты информации. Нормативные ссылки — справочные метаданные правил: их применимость и актуальность необходимо проверять по первоисточникам, модели угроз и условиям конкретной системы. Тесты целостности каталога не заменяют такую проверку.
 
@@ -196,7 +196,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Desloft-debug/fstec-lint@release/1.0.2-candidate
+      - uses: Desloft-debug/fstec-lint@v1.0.2
         with:
           path: deploy
           format: html
@@ -290,7 +290,7 @@ CI запускается для pull request и push в `main`: сборка и
 
 `fstec-lint` is a local static configuration analyzer with **56 rules** covering Docker Compose, Dockerfiles, PostgreSQL, SSH, systemd, dotenv, selected Linux settings, nginx and Postfix. Findings include severity, remediation and reference mappings to FSTEC measures.
 
-The source version is **`1.1.1.dev0`**, a development candidate. Python **3.10+** is required. Install from the desired checkout with `python -m pip install -e .`, then run:
+The package version is **`1.0.2`**, rebuilt with fixes on 2026-11-17. Python **3.10+** is required. Install from the desired checkout with `python -m pip install -e .`, then run:
 
 ```bash
 fstec-lint ./deploy --format html --output report.html --fail-on high
