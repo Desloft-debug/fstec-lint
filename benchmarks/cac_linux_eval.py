@@ -23,9 +23,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
-import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -81,6 +83,7 @@ def environment() -> jinja2.Environment:
         variable_end_string="}}}",
         comment_start_string="{{#",
         comment_end_string="#}}",
+        undefined=jinja2.StrictUndefined,
         keep_trailing_newline=True,
     )
 
@@ -128,7 +131,93 @@ def context(env: jinja2.Environment, cac: Path, rule: str) -> dict:
     return ctx
 
 
-def run(script: str, rsyslog_base: Path) -> tuple[Path, tempfile.TemporaryDirectory]:
+SETUP_TIMEOUT = 30
+LOG_LIMIT = 65536
+
+
+def execute_setup(work: Path) -> dict:
+    """Run only inside the disposable container. Preserve failures, bound runtime."""
+    require_isolated_container()
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        proc = subprocess.Popen(
+            ["bash", "-e", "-o", "pipefail", "scenario.sh"],
+            cwd=work,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            proc.wait(timeout=SETUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        finally:
+            # Also remove children left behind by a successful shell. A child
+            # escaping this session still requires per-container supervision.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        logs = {}
+        for name, stream in (("stdout", stdout), ("stderr", stderr)):
+            size = stream.tell()
+            stream.seek(0)
+            logs[name] = stream.read(LOG_LIMIT).decode("utf-8", errors="replace")
+            logs[name + "_truncated"] = size > LOG_LIMIT
+        return {
+            "status": "timeout" if timed_out else "ok" if proc.returncode == 0 else "failed",
+            "returncode": proc.returncode,
+            **logs,
+            "shell": "bash -e -o pipefail",
+            "timeout_seconds": SETUP_TIMEOUT,
+            "postconditions": "not_independently_verified",
+        }
+
+
+def snapshot(root: Path) -> dict:
+    files = {}
+    for path in sorted((root / "etc").rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if len(files) >= 200:
+            files["__snapshot_truncated__"] = True
+            break
+        with path.open("rb") as stream:
+            data = stream.read(LOG_LIMIT + 1)
+        files[str(path.relative_to(root))] = {
+            "prefix_sha256": hashlib.sha256(data[:LOG_LIMIT]).hexdigest(),
+            "text": data[:LOG_LIMIT].decode("utf-8", errors="replace"),
+            "truncated": len(data) > LOG_LIMIT,
+        }
+    return files
+
+
+def pwquality_oracle(root: Path, rule: str) -> dict:
+    """Optional real libpwquality binding, not a reimplementation of its parser."""
+    if not rule.startswith("accounts_password_pam_"):
+        return {"status": "not_available", "reason": "no independent runtime oracle"}
+    try:
+        import pwquality
+    except ImportError:
+        return {"status": "not_available", "reason": "python pwquality binding not installed"}
+    parameter = rule.rsplit("_", 1)[1]
+    try:
+        settings = pwquality.PWQSettings()
+        settings.read_config(str(root / "etc/security/pwquality.conf"))
+        value = getattr(settings, parameter)
+    except Exception as exc:
+        return {"status": "failed", "reason": str(exc)}
+    return {
+        "status": "ok",
+        "parameter": parameter,
+        "effective_value": value,
+        "expected_violation": value < int(PWQUALITY_VALUES[parameter][0]),
+        "scope": "libpwquality read_config; no PAM overrides or authentication execution",
+    }
+
+
+def run(script: str, rsyslog_base: Path) -> tuple[Path, tempfile.TemporaryDirectory, dict]:
     require_isolated_container()
     holder = tempfile.TemporaryDirectory()
     root = Path(holder.name)
@@ -142,61 +231,108 @@ def run(script: str, rsyslog_base: Path) -> tuple[Path, tempfile.TemporaryDirect
     work = root / "work"
     work.mkdir()
     (work / "scenario.sh").write_text(re.sub(r"(?<![\w.])/etc/", f"{etc}/", script))
-    subprocess.run(["bash", "scenario.sh"], cwd=work, check=False, capture_output=True)
-    shutil.rmtree(work)
-    return root, holder
+    setup = execute_setup(work)
+    setup["rendered_script"] = (work / "scenario.sh").read_text()
+    return root, holder, setup
 
 
 def evaluate(cac: Path, rsyslog_base: Path) -> dict:
     env = environment()
     rows = []
     for rule, (lint_rule, marker) in MAPPING.items():
-        ctx = context(env, cac, rule)
+        try:
+            ctx = context(env, cac, rule)
+            context_error = None
+        except jinja2.TemplateError as exc:
+            ctx, context_error = {}, str(exc)
         for path in scenarios(cac, rule):
             raw = path.read_text(encoding="utf-8")
-            skipped = None
+            row = {
+                "cac_rule": rule,
+                "rule": lint_rule,
+                "scenario": path.name,
+                "source": str(path.relative_to(cac)),
+                "source_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+                "raw_expected_violation": path.name.endswith(".fail.sh"),
+                "outcome": "not_evaluated",
+                "runtime_outcome": "not_available",
+            }
+            rows.append(row)
+            if not applicable(raw):
+                row.update(outcome="skipped", reason="platform not applicable")
+                continue
             if rule == "accounts_maximum_age_login_defs":
                 limit = login_defs_variable(raw)
                 if limit is not None and limit > MAX_LOGIN_DEFS_DAYS:
-                    skipped = f"порог профиля {limit} дней больше порога fstec-lint"
-            try:
-                script = env.from_string(raw).render(ctx)
-            except jinja2.UndefinedError:
-                if not applicable(raw):
+                    row.update(
+                        outcome="skipped", reason=f"profile threshold {limit} exceeds lint policy"
+                    )
                     continue
-                # Сценарий меняет настройки PAM макросами, которые здесь не
-                # воспроизводятся; pwquality.conf он не затрагивает.
-                skipped = "настройка PAM, а не pwquality.conf"
-                script = ""
-            if script and not applicable(script):
+            try:
+                if context_error:
+                    raise jinja2.UndefinedError(context_error)
+                script = env.from_string(raw).render(ctx)
+            except jinja2.TemplateError as exc:
+                row.update(outcome="render_failed", reason=str(exc))
                 continue
-            if skipped:
-                rows.append(
-                    {
-                        "cac_rule": rule,
-                        "rule": lint_rule,
-                        "scenario": path.name,
-                        "outcome": "skipped",
-                        "reason": skipped,
-                    }
-                )
+            row["rendered_sha256"] = hashlib.sha256(script.encode()).hexdigest()
+            if not applicable(script):
+                row.update(outcome="skipped", reason="rendered platform not applicable")
                 continue
-            root, holder = run(script, rsyslog_base)
+            try:
+                root, holder, setup = run(script, rsyslog_base)
+            except OSError as exc:
+                row.update(outcome="setup_failed", reason=str(exc))
+                continue
             with holder:
-                findings = [f for f in scan(root).findings if f.rule.id == lint_rule]
-            got = any(marker is None or marker in f.detail for f in findings)
-            rows.append(
-                {
-                    "cac_rule": rule,
-                    "rule": lint_rule,
-                    "scenario": path.name,
-                    "outcome": OUTCOME[(path.name.endswith(".fail.sh"), got)],
+                row["setup"] = setup
+                row["snapshot"] = snapshot(root)
+                if setup["status"] != "ok":
+                    row.update(outcome="setup_failed", reason=setup["status"])
+                    continue
+                try:
+                    result = scan(root / "etc")
+                except Exception as exc:
+                    row.update(outcome="scan_failed", reason=str(exc))
+                    continue
+                findings = [f for f in result.findings if f.rule.id == lint_rule]
+                row["scan"] = {
+                    "errors": [str(e) for e in result.errors],
+                    "findings": [{"rule": f.rule.id, "detail": f.detail} for f in findings],
                 }
-            )
+                if result.errors:
+                    row.update(outcome="scan_failed", reason="incomplete scan")
+                    continue
+                got = any(marker is None or marker in f.detail for f in findings)
+                row["observed_violation"] = got
+                row["outcome"] = OUTCOME[(row["raw_expected_violation"], got)]
+                oracle = pwquality_oracle(root, rule)
+                row["runtime_oracle"] = oracle
+                if oracle["status"] == "ok":
+                    expected = oracle["expected_violation"]
+                    row["runtime_outcome"] = OUTCOME[(expected, got)]
+                    row["policy_runtime_disagreement"] = expected != row["raw_expected_violation"]
     totals: dict[str, int] = {}
     for row in rows:
         totals[row["outcome"]] = totals.get(row["outcome"], 0) + 1
-    return {"scenarios": rows, "totals": totals}
+    valid = sum(totals.get(k, 0) for k in OUTCOME.values())
+    return {
+        "schema_version": 2,
+        "scenarios": rows,
+        "totals": totals,
+        "counts": {
+            "discovered": len(rows),
+            "classified_raw": valid,
+            "not_classified_raw": len(rows) - valid,
+            "runtime_classified": sum(r["runtime_outcome"] in OUTCOME.values() for r in rows),
+        },
+        "limitations": [
+            "adapted corpus, not full CaC profile",
+            "setup exit zero does not prove all postconditions",
+            "A002 parameter matching uses diagnostic text; stable subtype unavailable",
+            "runtime oracle optional and limited to pwquality config, not PAM",
+        ],
+    }
 
 
 def main() -> None:

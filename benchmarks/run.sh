@@ -37,6 +37,8 @@ fetch cac https://github.com/ComplianceAsCode/content.git "$CAC_REV" \
   /linux_os/guide/system/logging/rsyslog_sending_messages
 fetch openssh https://github.com/openssh/openssh-portable.git "$OPENSSH_REV" /sshd_config
 
+python3 "$here/manifest.py" "$here/.." "$work" "${RSYSLOG_CONF:-/etc/rsyslog.conf}" \
+  > "$here/results/manifest.json"
 mkdir -p /run/sshd 2>/dev/null || true
 python3 "$here/kics_eval.py" "$work/kics" > "$here/results/kics.json"
 python3 "$here/cac_sshd_eval.py" "$work/cac" "$work/openssh/sshd_config" > "$here/results/cac_sshd.json"

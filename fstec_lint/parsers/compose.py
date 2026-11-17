@@ -124,6 +124,36 @@ def _guard_graph(root: Any) -> None:
         visit(root, 1)
 
 
+def _guard_duplicate_keys(root: Any, loader: _BoundedLoader) -> None:
+    """Reject explicit duplicates before YAML merge flattening loses provenance.
+
+    Merge inheritance with an explicit override remains valid. Resolve scalar
+    keys as the loader does, so e.g. numeric spellings cannot overwrite silently.
+    """
+    nodes = [root]
+    seen: set[int] = set()
+    merge_key = object()
+    while nodes:
+        node = nodes.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            keys: set[Any] = set()
+            for key, value in node.value:
+                resolved = (
+                    merge_key
+                    if key.tag == "tag:yaml.org,2002:merge"
+                    else loader.construct_object(key)
+                )
+                if resolved in keys:
+                    raise ValueError("duplicate YAML mapping key")
+                keys.add(resolved)
+                nodes.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            nodes.extend(node.value)
+
+
 def _guard_merges(root: Any) -> None:
     """Budget PyYAML's flatten_mapping copies before constructing any objects."""
     nodes = [root]
@@ -255,6 +285,8 @@ def _guard_schema(data: dict[str, Any]) -> None:
     if not data:
         return
     if any(key in TOP_LEVEL_KEYS or str(key).startswith("x-") for key in data):
+        if any(key not in TOP_LEVEL_KEYS and not str(key).startswith("x-") for key in data):
+            raise ValueError("unsupported Compose top-level keys")
         return
     raise ValueError(
         "нет ни одного ключа верхнего уровня современного compose "
@@ -274,6 +306,7 @@ def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
     try:
         root = loader.get_single_node()
         _guard_graph(root)
+        _guard_duplicate_keys(root, loader)
         _guard_merges(root)
         lines, spans = _line_marks(root)
         data = loader.construct_document(root) if root is not None else None
@@ -291,9 +324,17 @@ def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
         raise ValueError("invalid YAML or YAML resource limit exceeded") from None
     finally:
         loader.dispose()
+    # Non-mapping documents must not become a successful empty scan. Validate
+    # the service container once, before dispatching every Compose rule.
+    if root is not None and not isinstance(data, dict):
+        raise ValueError("unsupported Compose shape")
     mapping = data if isinstance(data, dict) else {}
     _guard_schema(mapping)
     services = mapping.get("services", {})
+    if not isinstance(services, dict) or any(
+        not isinstance(service, dict) for service in services.values()
+    ):
+        raise ValueError("unsupported Compose shape")
     if "include" in mapping or (
         isinstance(services, dict)
         and any(isinstance(service, dict) and "extends" in service for service in services.values())

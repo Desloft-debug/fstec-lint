@@ -25,9 +25,11 @@ sshd_config из OpenSSH и запускает fstec-lint.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
-import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -178,55 +180,180 @@ def classify(name: str) -> str:
     return next(label for label, pattern in CLASSES if pattern.search(name))
 
 
+PROCESS_TIMEOUT = 30
+LOG_LIMIT = 65536
+
+
+def command(argv: list[str], cwd: Path | None = None) -> dict:
+    """Bound time and retained logs; disposable-container limits bound disk/CPU.
+
+    Clean the process group on every exit, including a successful shell exit.
+    Descendants that deliberately create another session require container teardown.
+    This helper is not a sandbox; the container interlock remains mandatory.
+    """
+    require_isolated_container()
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err, start_new_session=True)
+        except OSError as exc:
+            return {"status": "unavailable", "error": str(exc), "returncode": None}
+        timed_out = False
+        try:
+            proc.wait(timeout=PROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        finally:
+            # A shell can exit successfully while background children still run.
+            # Kill the whole original group before reading logs or fixtures.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        result = {"status": "timeout" if timed_out else "ok", "returncode": proc.returncode}
+        if not timed_out and proc.returncode:
+            result["status"] = "failed"
+        for name, stream in (("stdout", out), ("stderr", err)):
+            size = stream.tell()
+            stream.seek(0)
+            result[name] = stream.read(LOG_LIMIT).decode("utf-8", errors="replace")
+            result[name + "_truncated"] = size > LOG_LIMIT
+        return result
+
+
+def snapshot(directory: Path) -> dict:
+    """Retain bounded fixture evidence, excluding symlinks and host keys."""
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if len(files) >= 200:
+            return {"files": files, "truncated": True}
+        with path.open("rb") as stream:
+            data = stream.read(LOG_LIMIT + 1)
+        files[str(path.relative_to(directory))] = {
+            "content": data[:LOG_LIMIT].decode("utf-8", errors="replace"),
+            "truncated": len(data) > LOG_LIMIT,
+        }
+    return {"files": files, "truncated": False}
+
+
 def run_scenario(
     env: jinja2.Environment, rule_dir: Path, scenario: Path, base: Path, context: dict
-) -> tuple[dict[str, str] | None, list[str]]:
+) -> dict:
+    stages = {name: {"status": "not_run"} for name in ("render", "setup", "oracle", "scan")}
+    evidence: dict = {"stages": stages}
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         etc = root / "etc" / "ssh"
         etc.mkdir(parents=True)
-        # Как в RHEL 9 и Ubuntu: drop-in каталог подключается первой строкой.
         (etc / "sshd_config").write_text(
             f"Include {etc}/sshd_config.d/*.conf\n" + base.read_text(encoding="utf-8")
         )
         work = root / "work"
         work.mkdir()
-        # Вспомогательные файлы (common.sh, include.sh) лежат рядом со сценарием.
-        for helper in list(scenario.parent.glob("*.sh")) + list(rule_dir.glob("*.sh")):
-            if not helper.name.endswith((".pass.sh", ".fail.sh")):
-                text = render(env, helper.read_text(encoding="utf-8"), context)
-                (work / helper.name).write_text(text.replace("/etc/ssh", str(etc)))
-        script = render(env, scenario.read_text(encoding="utf-8"), context)
-        (work / "scenario.sh").write_text(script.replace("/etc/ssh", str(etc)))
-        require_isolated_container()
-        subprocess.run(["bash", "scenario.sh"], cwd=work, check=False, capture_output=True)
-        shutil.rmtree(work)
-        effective = sshd_effective(root, etc / "sshd_config")
-        result = scan(root / "etc")
-        return effective, [f.rule.id for f in result.findings]
+        raw = scenario.read_text(encoding="utf-8")
+        evidence["source"] = {
+            "path": str(scenario),
+            "sha256": hashlib.sha256(raw.encode()).hexdigest(),
+            "content": raw[:LOG_LIMIT],
+            "truncated": len(raw) > LOG_LIMIT,
+        }
+        try:
+            for helper in list(scenario.parent.glob("*.sh")) + list(rule_dir.glob("*.sh")):
+                if not helper.name.endswith((".pass.sh", ".fail.sh")):
+                    text = render(env, helper.read_text(encoding="utf-8"), context)
+                    (work / helper.name).write_text(text.replace("/etc/ssh", str(etc)))
+            script = render(env, raw, context)
+            (work / "scenario.sh").write_text(script.replace("/etc/ssh", str(etc)))
+        except jinja2.TemplateError as exc:
+            stages["render"] = {"status": "failed", "error": str(exc)}
+            evidence["status"] = "render_failed"
+            return evidence
+        stages["render"] = {
+            "status": "ok",
+            "source_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+        }
+        evidence["rendered_scripts"] = snapshot(work)
+        stages["setup"] = command(["bash", "-e", "-o", "pipefail", "scenario.sh"], cwd=work)
+        evidence["fixture"] = snapshot(root / "etc")
+        if stages["setup"]["status"] != "ok":
+            evidence["status"] = "setup_failed"
+            return evidence
+        # A zero exit status is not a general postcondition proof.
+        stages["setup"]["postconditions"] = "not_independently_asserted"
+        effective, stages["oracle"] = sshd_effective(root, etc / "sshd_config")
+        evidence["effective"] = effective
+        try:
+            result = scan(root / "etc")
+            evidence["rules_hit"] = [f.rule.id for f in result.findings]
+            stages["scan"] = {
+                "status": "failed" if result.errors else "ok",
+                "errors": [str(error) for error in result.errors],
+            }
+        except Exception as exc:
+            stages["scan"] = {"status": "failed", "errors": [str(exc)]}
+        evidence["status"] = "scan_failed" if stages["scan"]["status"] != "ok" else "ok"
+        return evidence
 
 
-def sshd_effective(root: Path, config: Path) -> dict[str, str] | None:
-    """Вывод `sshd -T` в виде словаря; None, если sshd отверг конфигурацию."""
+def sshd_effective(root: Path, config: Path) -> tuple[dict[str, str] | None, dict]:
+    """Distinguish rejected configuration from unavailable/failed oracle."""
     key = root / "hostkey"
-    require_isolated_container()
-    subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-        check=True,
-        capture_output=True,
-    )
-    proc = subprocess.run(
-        ["sshd", "-T", "-f", str(config), "-h", str(key)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    key.unlink()
-    key.with_suffix(".pub").unlink()
-    if proc.returncode != 0:
-        return None
-    pairs = (line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
-    return {k: v for k, v in pairs}
+    keygen = command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
+    if keygen["status"] != "ok":
+        return None, {"status": "failed", "keygen": keygen}
+    proc = command(["sshd", "-T", "-f", str(config), "-h", str(key)])
+    if proc["status"] != "ok":
+        return None, {
+            "status": "invalid" if proc["status"] == "failed" else "failed",
+            "command": proc,
+        }
+    if proc.get("stdout_truncated"):
+        return None, {"status": "failed", "reason": "oracle_output_truncated", "command": proc}
+    pairs = (line.split(" ", 1) for line in proc["stdout"].splitlines() if " " in line)
+    effective = dict(pairs)
+    required = {
+        "permitrootlogin",
+        "permitemptypasswords",
+        "x11forwarding",
+        "maxauthtries",
+        "loglevel",
+    }
+    if not required <= effective.keys():
+        return None, {"status": "failed", "reason": "missing_effective_parameters", "command": proc}
+    domains = {
+        "permitrootlogin": {
+            "yes",
+            "no",
+            "prohibit-password",
+            "without-password",
+            "forced-commands-only",
+        },
+        "permitemptypasswords": {"yes", "no"},
+        "x11forwarding": {"yes", "no"},
+        # OpenSSH sshd -T canonicalizes QUIET to SILENT (observed 9.2).
+        # Accept both input-style and canonical output spellings; derive quiet
+        # aliases from the same set used by S008 to avoid validation drift.
+        "loglevel": set(QUIET_LEVELS) | {"INFO", "VERBOSE", "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3"},
+    }
+    invalid = {
+        key: effective[key]
+        for key, values in domains.items()
+        if (effective[key].upper() if key == "loglevel" else effective[key]) not in values
+    }
+    tries = effective["maxauthtries"]
+    # OpenSSH's integer option: nonnegative signed int, not arbitrary Python int.
+    if not re.fullmatch(r"[0-9]{1,10}", tries) or int(tries) > 2147483647:
+        invalid["maxauthtries"] = tries
+    if invalid:
+        return None, {
+            "status": "failed",
+            "reason": "invalid_effective_parameters",
+            "invalid_parameters": invalid,
+            "command": proc,
+        }
+    return effective, {"status": "ok", "command": proc, "context": "global_without_Match_context"}
 
 
 def evaluate(cac: Path, base: Path, insecure: bool = False) -> dict:
@@ -249,27 +376,42 @@ def evaluate(cac: Path, base: Path, insecure: bool = False) -> dict:
         for name, path in scenarios(cac, rule, insecure).items():
             if not name.endswith((".pass.sh", ".fail.sh")):
                 continue
+            row = {
+                "cac_rule": rule,
+                "rule": lint_rule,
+                "match": kind,
+                "scenario": name,
+                "class": classify(name),
+                "raw_expected_positive": name.endswith(".fail.sh"),
+            }
             text = path.read_text(encoding="utf-8")
             if not applicable(text):
+                row.update(
+                    outcome="skipped", sshd_outcome="skipped", reason="platform_not_applicable"
+                )
+                rows.append(row)
                 continue
-            effective, rules_hit = run_scenario(env, rule_dir / "tests", path, base, context)
-            got = lint_rule in rules_hit
-            outcome = OUTCOME[(name.endswith(".fail.sh"), got)]
-            if effective is None:
-                sshd_outcome = "invalid"
+            evidence = run_scenario(env, rule_dir / "tests", path, base, context)
+            row.update(evidence)
+            if evidence["status"] != "ok":
+                row.update(outcome=evidence["status"], sshd_outcome=evidence["status"])
             else:
-                sshd_outcome = OUTCOME[(ORACLE[lint_rule](effective), got)]
-            rows.append(
-                {
-                    "cac_rule": rule,
-                    "rule": lint_rule,
-                    "match": kind,
-                    "scenario": name,
-                    "class": classify(name),
-                    "outcome": outcome,
-                    "sshd_outcome": sshd_outcome,
-                }
-            )
+                got = lint_rule in evidence["rules_hit"]
+                row["outcome"] = OUTCOME[(row["raw_expected_positive"], got)]
+                if evidence["stages"]["oracle"]["status"] != "ok":
+                    row["sshd_outcome"] = "oracle_" + evidence["stages"]["oracle"]["status"]
+                else:
+                    try:
+                        expected = ORACLE[lint_rule](evidence["effective"])
+                        row["runtime_expected_positive"] = expected
+                        row["policy_runtime_disagreement"] = (
+                            expected != row["raw_expected_positive"]
+                        )
+                        row["sshd_outcome"] = OUTCOME[(expected, got)]
+                    except (ValueError, KeyError, TypeError) as exc:
+                        row["sshd_outcome"] = "oracle_failed"
+                        row["oracle_error"] = str(exc)
+            rows.append(row)
     totals: dict[str, int] = {}
     for row in rows:
         for key in (
@@ -278,7 +420,24 @@ def evaluate(cac: Path, base: Path, insecure: bool = False) -> dict:
             f"sshd:{row['sshd_outcome']}",
         ):
             totals[key] = totals.get(key, 0) + 1
-    return {"scenarios": rows, "totals": totals}
+    return {
+        "schema_version": 2,
+        "mode": "insecure" if insecure else "default",
+        "scenarios": rows,
+        "totals": totals,
+        "denominators": {
+            "discovered": len(rows),
+            "cac_classified": sum(row["outcome"] in {"tp", "tn", "fp", "fn"} for row in rows),
+            "runtime_classified": sum(
+                row["sshd_outcome"] in {"tp", "tn", "fp", "fn"} for row in rows
+            ),
+        },
+        "limitations": [
+            "Adapted CaC templates, not a full SCAP run",
+            "Setup exit 0 is not independent postcondition validation",
+            "sshd oracle uses global context only",
+        ],
+    }
 
 
 def main() -> None:

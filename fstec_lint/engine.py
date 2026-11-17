@@ -292,6 +292,11 @@ def _is_excluded(name: str, relative: str, patterns: Sequence[str]) -> bool:
     return _matches_any(name, patterns) or _matches_any(relative, patterns)
 
 
+# Bound recursive discovery independently of per-file parser limits.
+MAX_SCAN_DEPTH = 128
+MAX_SCAN_ENTRIES = 100_000
+
+
 def _candidate_files(
     root: Path,
     exclude: Sequence[str],
@@ -325,8 +330,16 @@ def _candidate_files(
         return False
 
     ancestry: dict[Path, tuple[Path, ...]] = {root: (boundary,)}
+    visited_entries = 0
     for dirpath, dirnames, filenames in os.walk(root, onerror=_report):
         current = Path(dirpath)
+        visited_entries += len(dirnames) + len(filenames)
+        if visited_entries > MAX_SCAN_ENTRIES:
+            _report(OSError(0, "scan entry limit exceeded", str(current)))
+            break
+        if len(current.relative_to(root).parts) >= MAX_SCAN_DEPTH and dirnames:
+            _report(OSError(0, "scan directory depth limit exceeded", str(current)))
+            dirnames[:] = []
         # Обрезаем дерево на месте: в node_modules и .git незачем заходить.
         dirnames[:] = [
             d
@@ -482,6 +495,7 @@ def _run_registry(
             data: Any
             if parse is parse_compose:
                 data = parse_compose(path, scan_root=boundary)
+                compose_checks.validate_compose_shape(data)
             elif parse is parse_pg_hba:
                 data = parse_pg_hba(path, scan_root=boundary)
             elif parse is parse_dockerfile:
