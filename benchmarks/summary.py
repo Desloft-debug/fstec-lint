@@ -26,7 +26,18 @@ def metrics(tp: int, fp: int, fn: int) -> str:
 
 def kics(path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
-    print("KICS: Docker Compose и Dockerfile")
+    print("KICS: agreement with fixture labels, not measured whole-project accuracy")
+    print("  TP/FP/FN: service/file units; TN: negative files (do not combine)")
+    print("  Eligible rule-id agreements after corpus exclusions (including ambiguous mappings).")
+    if "evaluable_totals" in data:
+        e = data["evaluable_totals"]
+        print("  Evaluable mappings only:", metrics(e.get("tp", 0), e.get("fp", 0), e.get("fn", 0)))
+        print(
+            "  Excluded ambiguous queries:",
+            e.get("unscorable_queries", 0),
+            "; failed files:",
+            e.get("scan_failed_files", 0),
+        )
     for kind in ("full", "partial"):
         rows = [q for q in data["queries"] if q["match"] == kind]
         tp = sum(len(q["tp"]) for q in rows)
@@ -52,16 +63,22 @@ def cac(path: Path, title: str) -> None:
     rows = data["scenarios"]
     print(title)
     for oracle, key in (("метка ComplianceAsCode", "outcome"), ("эталон sshd -T", "sshd_outcome")):
-        valid = [r for r in rows if r[key] != "invalid"]
+        valid = [r for r in rows if r.get(key) in {"tp", "fp", "fn", "tn"}]
         count = {o: sum(1 for r in valid if r[key] == o) for o in ("tp", "fp", "fn", "tn")}
         skipped = len(rows) - len(valid)
-        note = f", отвергнуто sshd: {skipped}" if skipped else ""
+        note = f", вне матрицы: {skipped}" if skipped else ""
         line = metrics(count["tp"], count["fp"], count["fn"])
         print(f"  {oracle:22} {line} TN={count['tn']}{note}")
-    main_only = [r for r in rows if r["class"] != "directory" and r["sshd_outcome"] != "invalid"]
+    main_only = [
+        r
+        for r in rows
+        if r.get("class") != "directory" and r.get("sshd_outcome") in {"tp", "fp", "fn", "tn"}
+    ]
     count = {o: sum(1 for r in main_only if r["sshd_outcome"] == o) for o in ("tp", "fp", "fn")}
     print(f"  {'sshd -T, без drop-in':22} {metrics(count['tp'], count['fp'], count['fn'])}")
-    rest = [r for r in rows if r["rule"] != "S004" and r["sshd_outcome"] != "invalid"]
+    rest = [
+        r for r in rows if r["rule"] != "S004" and r.get("sshd_outcome") in {"tp", "fp", "fn", "tn"}
+    ]
     count = {o: sum(1 for r in rest if r["sshd_outcome"] == o) for o in ("tp", "fp", "fn")}
     print(f"  {'sshd -T, без S004':22} {metrics(count['tp'], count['fp'], count['fn'])}")
 
@@ -70,10 +87,20 @@ def linux(path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     rows = data["scenarios"]
     print("ComplianceAsCode: login.defs, pwquality.conf, default/useradd, rsyslog.conf")
+    print("  Raw CaC label agreement; runtime is separate and may disagree.")
+    runtime = [r for r in rows if r.get("runtime_outcome") in {"tp", "fp", "fn", "tn"}]
+    if runtime:
+        count = {o: sum(r["runtime_outcome"] == o for r in runtime) for o in ("tp", "fp", "fn")}
+        print(
+            "  pwquality runtime:",
+            metrics(count["tp"], count["fp"], count["fn"]),
+            "classified:",
+            len(runtime),
+        )
     for rule in sorted({r["rule"] for r in rows}):
         sub = [r for r in rows if r["rule"] == rule]
         count = {o: sum(1 for r in sub if r["outcome"] == o) for o in ("tp", "fp", "fn", "tn")}
-        skipped = sum(1 for r in sub if r["outcome"] == "skipped")
+        skipped = sum(1 for r in sub if r["outcome"] not in {"tp", "fp", "fn", "tn"})
         note = f", пропущено сценариев: {skipped}" if skipped else ""
         line = metrics(count["tp"], count["fp"], count["fn"])
         print(f"  {rule:6} {line} TN={count['tn']}{note}")

@@ -142,7 +142,8 @@ def test_line_continuation_still_joins_instructions(tmp_path):
     )
 
     assert len(instructions) == 2
-    assert instructions[1]["args"] == "apk add --no-cache curl git"
+    # BuildKit concatenates physical lines without normalizing their spaces.
+    assert instructions[1]["args"] == "apk add --no-cache     curl     git"
     assert instructions[1]["line"] == 2
 
 

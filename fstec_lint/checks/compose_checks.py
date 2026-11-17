@@ -86,6 +86,21 @@ def _scalar(value: object) -> bool:
     return type(value) in (str, int, float, bool, type(None))
 
 
+def _compose_boolean(value: object) -> bool | None:
+    """Match compose-go toBoolean literals; leave interpolation unresolved."""
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, str):
+        if ENV_SUBSTITUTION_RE.fullmatch(value):
+            return None
+        lowered = value.lower()
+        if lowered in {"true", "y", "yes", "on"}:
+            return True
+        if lowered in {"false", "n", "no", "off"}:
+            return False
+    raise ValueError("unsupported Compose boolean")
+
+
 def _services(compose: dict) -> dict:
     _guard_graph(compose)
     if not isinstance(compose, dict):
@@ -104,6 +119,21 @@ def _services(compose: dict) -> dict:
                 field == "image" and value is not None and not isinstance(value, str)
             ):
                 raise ValueError("unsupported Compose shape")
+        # Validate supported boolean spellings without resolving environment.
+        for field in ("privileged", "read_only"):
+            _compose_boolean(svc.get(field))
+        healthcheck = svc.get("healthcheck")
+        if healthcheck is not None:
+            if not isinstance(healthcheck, dict):
+                raise ValueError("unsupported Compose shape")
+            _compose_boolean(healthcheck.get("disable"))
+            test = healthcheck.get("test")
+            if (
+                test is not None
+                and not isinstance(test, str)
+                and not (isinstance(test, list) and all(isinstance(item, str) for item in test))
+            ):
+                raise ValueError("unsupported Compose healthcheck test")
         env = svc.get("environment")
         if env is not None:
             if isinstance(env, dict):
@@ -126,6 +156,11 @@ def _services(compose: dict) -> dict:
         if isinstance(deploy, dict) and not isinstance(deploy.get("resources", {}), dict):
             raise ValueError("unsupported Compose shape")
     return services
+
+
+def validate_compose_shape(compose: dict) -> None:
+    """Preflight the shared rule input once; direct checks retain their guards."""
+    _services(compose)
 
 
 def _line(compose: dict, service: str, *keys: str) -> int | None:
@@ -169,7 +204,7 @@ def check_root_user(compose: dict) -> CheckResults:
 def check_privileged(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        if isinstance(svc, dict) and svc.get("privileged") is True:
+        if isinstance(svc, dict) and _compose_boolean(svc.get("privileged")) is True:
             findings.append(
                 (
                     f"service:{name}",
@@ -186,7 +221,7 @@ def check_dangerous_capabilities(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         caps = as_list(svc.get("cap_add"))
-        bad = [str(c) for c in caps if str(c).upper() in DANGEROUS_CAPS]
+        bad = [str(c) for c in caps if str(c).upper().removeprefix("CAP_") in DANGEROUS_CAPS]
         missing_drop = not any(str(c).upper() == "ALL" for c in as_list(svc.get("cap_drop")))
         if bad or missing_drop:
             detail = []
@@ -385,7 +420,7 @@ def check_docker_socket_mount(compose: dict) -> CheckResults:
 def check_no_read_only(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        if isinstance(svc, dict) and svc.get("read_only") is not True:
+        if isinstance(svc, dict) and _compose_boolean(svc.get("read_only")) is not True:
             findings.append(
                 (
                     f"service:{name}",
@@ -483,7 +518,9 @@ def check_missing_healthcheck(compose: dict) -> CheckResults:
             continue
         healthcheck = svc.get("healthcheck")
         test = healthcheck.get("test") if isinstance(healthcheck, dict) else None
-        disabled = isinstance(healthcheck, dict) and healthcheck.get("disable") is True
+        disabled = (
+            isinstance(healthcheck, dict) and _compose_boolean(healthcheck.get("disable")) is True
+        )
         none_test = (isinstance(test, list) and bool(test) and str(test[0]).upper() == "NONE") or (
             isinstance(test, str) and test.strip().upper() == "NONE"
         )

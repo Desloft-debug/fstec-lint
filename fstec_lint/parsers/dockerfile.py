@@ -48,25 +48,54 @@ def parse_dockerfile(path: Path, scan_root: Path | None = None) -> list[dict]:
     instructions: list[dict] = []
     lines = BoundedReader(scan_root or path.parent).read(path).splitlines()
 
+    escape = "\\"
+    directives_open = True
+    seen_escape = False
     index = 0
     while index < len(lines):
         stripped = lines[index].strip()
         index += 1
-        if not stripped or stripped.startswith("#"):
+        if not stripped:
+            directives_open = False
             continue
+        if stripped.startswith("#"):
+            if directives_open:
+                directive = re.fullmatch(
+                    r"#\s*(syntax|escape|check)\s*=\s*(.*?)\s*", stripped, re.IGNORECASE
+                )
+                if directive is None:
+                    directives_open = False
+                elif directive.group(1).lower() == "escape":
+                    value = directive.group(2)
+                    if seen_escape or value not in ("\\", "`"):
+                        raise ValueError("invalid Dockerfile escape directive")
+                    escape = value
+                    seen_escape = True
+            continue
+        directives_open = False
 
         start_line = index
-        buffer = stripped
-        while buffer.endswith("\\") and index < len(lines):
-            following = lines[index].strip()
+        # BuildKit strips leading whitespace only on the first physical line.
+        # Continuation removes the escape and trailing spaces, but never inserts
+        # a space or discards the next line's indentation (cu + rl means curl).
+        continuation = re.compile(
+            r"(?<!" + re.escape(escape) + r")" + re.escape(escape) + r"[ \t]*$"
+        )
+        buffer = lines[index - 1].lstrip()
+        match = continuation.search(buffer)
+        continued = match is not None
+        if match is not None:
+            buffer = buffer[: match.start()]
+        while continued and index < len(lines):
+            following = lines[index]
             index += 1
-            # Комментарий внутри продолжения Docker отбрасывает, а сама
-            # инструкция продолжается дальше. Приклеивать его к команде
-            # нельзя: остаток строки уходил в отдельную «инструкцию» и
-            # RUN терял хвост вместе с проверками по нему.
-            if following.startswith("#"):
+            if not following.strip() or following.lstrip().startswith("#"):
                 continue
-            buffer = buffer[:-1].rstrip() + " " + following
+            match = continuation.search(following)
+            continued = match is not None
+            if match is not None:
+                following = following[: match.start()]
+            buffer += following
 
         parts = buffer.split(None, 1)
         instruction = parts[0].upper()

