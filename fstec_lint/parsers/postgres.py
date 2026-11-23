@@ -245,9 +245,7 @@ def _hba_record(parts: list[str], line: str, lineno: int) -> dict:
             raise ValueError("unsupported pg_hba record")
         if len(parts) < 5:
             raise ValueError("invalid pg_hba record")
-        # 'адрес маска' занимает два поля, метод сдвинут вправо.
-        # Иначе методом становилась маска, а 'trust' уезжал в
-        # options, и P001 не срабатывал на входе без пароля.
+        # При отдельной маске метод аутентификации находится на поле правее.
         if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
             if len(parts) < 6:
                 raise ValueError("invalid pg_hba record")

@@ -203,8 +203,7 @@ def _prepare_connection(connection: sqlite3.Connection, *, write: bool, initiali
     if trusted is None or trusted[0] != 0:
         raise HistoryError("для истории требуется SQLite 3.31+ с trusted_schema")
     connection.execute("PRAGMA cell_size_check = ON")
-    # Read both header fields in one snapshot. During the very first
-    # parallel import separate autocommit reads can straddle schema setup.
+    # Read both header fields in one snapshot during concurrent initialization.
     connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
     application = connection.execute("PRAGMA application_id").fetchone()[0]
     version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -287,7 +286,6 @@ def encrypt_history(source: Path, destination: Path) -> None:
     validate_db_path(destination, [source])
     key = history_crypto.load_key(key_file)
     with history_crypto.writer_lock(destination):
-        # Refuse even a dangling symlink or an empty existing destination.
         if destination.exists() or destination.is_symlink():
             raise HistoryError("путь для зашифрованной копии уже занят")
         with _connect_plain(source) as original:
@@ -299,9 +297,7 @@ def encrypt_history(source: Path, destination: Path) -> None:
                     raise HistoryError("исходная база SQLite повреждена")
                 if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
                     raise HistoryError("в исходной истории нарушены внешние ключи")
-                # A backup can inherit WAL format bytes from disk, even though the
-                # connection reports journal_mode=memory. Rebuild the memory copy
-                # so deserialization does not try to open external WAL files.
+                # Normalize inherited WAL headers before serializing the in-memory copy.
                 db.execute("VACUUM")
                 history_crypto.save_snapshot(db, destination, key)
             finally:

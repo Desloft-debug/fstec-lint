@@ -98,7 +98,6 @@ def _is_dynamic(value: object) -> bool:
 
 
 def _any_dynamic(value: object) -> bool:
-    # Only used on narrowly selected, already shape-checked fields.
     if isinstance(value, (list, dict)):
         entries = value.values() if isinstance(value, dict) else value
         return any(_is_dynamic(entry) for entry in entries)
@@ -845,7 +844,7 @@ def _unresolved_service(compose: dict, svc: dict, rule_id: str) -> bool:
         return _is_dynamic(healthcheck.get("disable")) or _is_dynamic(operator)
     if rule_id == "C016":
         networks = svc.get("networks")
-        # Mapping keys (network names) are not interpolated in Compose.
+        # Compose does not interpolate mapping keys.
         return _is_dynamic(svc.get("network_mode")) or (
             isinstance(networks, list) and _any_dynamic(networks)
         )

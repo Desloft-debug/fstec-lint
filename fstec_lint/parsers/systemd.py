@@ -68,8 +68,7 @@ def _scope_names(unit: str) -> list[str]:
 
 
 def _local_drop_ins(entry: Path, reader: BoundedReader) -> list[Path]:
-    # Scope priority only decides a tie between equal basenames. All
-    # different basenames are applied in a single lexicographic order.
+    # Priority breaks basename ties; the remaining files sort by name.
     winners: dict[str, Path] = {}
     for name in _scope_names(entry.name):
         try:

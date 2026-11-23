@@ -3,12 +3,10 @@
 [![CI](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml/badge.svg)](https://github.com/Desloft-debug/fstec-lint/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Проверка конфигураций инфраструктуры до развёртывания.** fstec-lint находит
-рискованные настройки в файлах проекта, показывает исходный файл и строку,
-предлагает исправление и приводит справочную ссылку на меру ФСТЭК.
-Линтер не запускает контейнеры, команды из конфигураций или проверяемые сервисы.
+fstec-lint проверяет конфигурации инфраструктуры до развёртывания.
+В отчёте указаны файл, строка, рекомендация и справочная привязка к мерам ФСТЭК.
 
-Эта ветка содержит **1.1 (`1.1.0.dev0`)** и **62 правила**. Нужен Python 3.10 или новее.
+Рабочая версия: `1.1.0.dev0`, 62 правила, Python 3.10+.
 
 ## Быстрый старт
 
@@ -30,12 +28,8 @@ python3 -m venv .venv
 .venv/bin/fstec-lint menu
 ```
 
-В меню укажите путь к проекту или отдельному файлу. Программа покажет находки
-в терминале и предложит сохранить текстовый отчёт. Меню не требует браузера
-и не создаёт базу данных.
-
-В следующих примерах используйте команду `fstec-lint` из своего окружения
-(или путь к ней из блока выше).
+Укажите в меню файл или каталог. Для команд ниже активируйте окружение
+или укажите полный путь к `fstec-lint`.
 
 ```bash
 # Проверка тестового стенда и HTML-отчёт
@@ -47,10 +41,6 @@ fstec-lint ./deploy --strict-scope --require-input --no-inline-suppressions --fa
 # Каталог правил без сканирования
 fstec-lint --list-rules
 ```
-
-Откройте `review.html` в браузере: сверху сводка по уровням, ниже находки
-по файлам, рекомендации и информация о неполной проверке. Отдельного
-графического интерфейса для запуска проверок нет.
 
 ## Что проверяется
 
@@ -134,10 +124,9 @@ fstec-lint history list checks.sqlite3 --project demo
 
 ## Границы проверки и документация
 
-Линтер проверяет то, что видно в файлах. Он не подтверждает реальное состояние
-сервисов и не заменяет аттестацию. Ссылки на меры ФСТЭК служат для навигации:
-применимость нужно сверять отдельно. `--gis-class` даёт контекст в `json-context` и SARIF,
-не определяет класс и не фильтрует находки.
+Линтер не запускает сервисы и не подтверждает их состояние. Привязки к мерам
+ФСТЭК справочные. `--gis-class` указывает заданный класс ГИС в `json-context`
+и SARIF и не меняет состав проверок.
 
 - [Нормативные источники и сила привязок](docs/regulatory-2026.md)
 - [Обработка входов, ресурсы и baseline](docs/security.md)
@@ -149,11 +138,7 @@ fstec-lint history list checks.sqlite3 --project demo
 ## English summary
 
 fstec-lint is a local static infrastructure configuration checker for Python 3.10+.
-This branch contains the 1.1 development build (`1.1.0.dev0`) with 62 rules.
-Run `fstec-lint menu` for the terminal menu, or use
-`fstec-lint ./deploy --format html --output report.html` for an HTML report.
-Use `json-context` to distinguish findings from incomplete analysis in CI.
-Optional local history can store scan results and import JUnit outcomes
-under the same revision. It supports SQLite and an authenticated encrypted file. This tool does not run checked services or certify them.
+Run `fstec-lint menu` or use `--format json-context` to get findings and scan
+completeness in CI. Optional local history supports SQLite and encrypted `.fsth`.
 
 [MIT](LICENSE).
