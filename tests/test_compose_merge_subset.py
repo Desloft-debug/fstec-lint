@@ -66,9 +66,9 @@ def test_merge_add_disjoint_services_and_top_level_resources(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("one", "two"),
     (
-        ("ports: ['127.0.0.1:81:80']", "ports: ['127.0.0.1:82:80']"),
-        ("healthcheck: {test: ['CMD', 'true']}", "healthcheck: {timeout: '1s'}"),
-        ("environment: {APP_MODE: demo}", "environment: ['APP_MODE=test']"),
+        ("volumes: ['first:/work']", "volumes: ['second:/work']"),
+        ("logging: {driver: local}", "logging: {driver: json-file}"),
+        ("security_opt: ['no-new-privileges:true']", "security_opt: ['label=disable']"),
         ("read_only: true", "read_only: null"),
     ),
 )

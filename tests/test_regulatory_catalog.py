@@ -73,7 +73,7 @@ def test_legacy_pdn_codes_and_levels_are_additive_and_not_proven(catalogue):
 
 def test_audited_rows_are_not_compliance_verdicts(catalogue):
     checked = [x for x in catalogue["rules"] if x["regulatory"]["assessed_reference"]]
-    assert len(checked) == 32
+    assert len(checked) == 34
     for row in catalogue["rules"]:
         md = row["regulatory"]
         assert md["references"] and md["limitation"]

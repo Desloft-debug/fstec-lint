@@ -24,3 +24,7 @@ fstec-lint-1.1.0/
 /demo-history/
 /checks.sqlite3
 /checks.sqlite3-*
+*.fsth
+*.fsth.lock
+.fstec-history-*.tmp
+/fstec-history.key

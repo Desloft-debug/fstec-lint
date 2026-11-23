@@ -11,13 +11,14 @@ import sqlite3
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from . import __version__
+from . import __version__, history_crypto
 from .engine import ScanResult
+from .history_crypto import HistoryError as HistoryError
 from .parsers.base import read_regular_bytes
 
 APP_ID = 0x46535448  # FSTH
@@ -74,10 +75,6 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 CREATE INDEX IF NOT EXISTS observations_definition ON observations (tool, code);
 """
-
-
-class HistoryError(ValueError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -153,6 +150,13 @@ def scan_records(result: ScanResult, scope_root: Path) -> list[Record]:
 
 def validate_db_path(path: Path, other_paths: Sequence[Path]) -> None:
     try:
+        key = history_crypto.key_path()
+        if key is not None:
+            for candidate in (path, *other_paths):
+                if candidate.resolve() == key.resolve() or (
+                    candidate.exists() and key.exists() and candidate.samefile(key)
+                ):
+                    raise HistoryError("файл ключа должен быть отделён от базы, входов и отчётов")
         for other in other_paths:
             if path.resolve() == other.resolve() or (
                 path.exists() and other.exists() and path.samefile(other)
@@ -160,8 +164,15 @@ def validate_db_path(path: Path, other_paths: Sequence[Path]) -> None:
                 raise HistoryError("база истории должна быть отдельным файлом")
     except (OSError, RuntimeError) as exc:
         raise HistoryError("не удалось проверить путь базы истории") from exc
-    if path.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} or path.name.startswith(".env"):
-        raise HistoryError("имя базы истории должно оканчиваться на .sqlite, .sqlite3 или .db")
+    suffix = path.suffix.lower()
+    if suffix == history_crypto.ENCRYPTED_SUFFIX and not path.name.lower().startswith(".env"):
+        if key is None:
+            raise HistoryError(f"для зашифрованной истории задайте {history_crypto.KEY_ENV}")
+        return
+    if key is not None:
+        raise HistoryError("для зашифрованной истории используйте расширение .fsth")
+    if suffix not in {".sqlite", ".sqlite3", ".db"} or path.name.startswith(".env"):
+        raise HistoryError("обычная база истории должна оканчиваться на .sqlite, .sqlite3 или .db")
 
 
 def _schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, ...], ...]:
@@ -182,51 +193,119 @@ def _expected_schema_signature() -> tuple[tuple[str, ...], ...]:
         connection.close()
 
 
-@contextmanager
-def _connect(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connection]:
+def _prepare_connection(connection: sqlite3.Connection, *, write: bool, initialize: bool) -> None:
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise HistoryError("не удалось включить внешние ключи")
+    connection.execute("PRAGMA trusted_schema = OFF")
+    trusted = connection.execute("PRAGMA trusted_schema").fetchone()
+    if trusted is None or trusted[0] != 0:
+        raise HistoryError("для истории требуется SQLite 3.31+ с trusted_schema")
+    connection.execute("PRAGMA cell_size_check = ON")
+    # Read both header fields in one snapshot. During the very first
+    # parallel import separate autocommit reads can straddle schema setup.
+    connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+    application = connection.execute("PRAGMA application_id").fetchone()[0]
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if application == 0 and version == 0 and initialize:
+        if connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone():
+            raise HistoryError("файл содержит другую базу")
+        for statement in SCHEMA.split(";"):
+            if statement.strip():
+                connection.execute(statement)
+        connection.execute(f"PRAGMA application_id = {APP_ID}")
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        application, version = APP_ID, SCHEMA_VERSION
+    if (application, version) != (APP_ID, SCHEMA_VERSION):
+        raise HistoryError("неподдерживаемая база истории")
+    if _schema_signature(connection) != _expected_schema_signature():
+        raise HistoryError("структура базы истории не совпадает со схемой fstec-lint")
+    if write:
+        connection.commit()
+
+
+def _check_history_file(path: Path) -> None:
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise HistoryError("ожидался обычный файл базы данных")
+
+
+@contextmanager
+def _connect_plain(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connection]:
+    _check_history_file(path)
     if create and not path.exists():
         try:
             with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"):
                 pass
         except FileExistsError:
             pass
+    length = len(history_crypto.MAGIC)
+    if path.exists() and read_regular_bytes(path, length) == history_crypto.MAGIC:
+        raise HistoryError("ожидалась обычная, а не зашифрованная база SQLite")
     mode = "rw" if create else "ro"
     connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode={mode}", uri=True, timeout=5)
-    connection.row_factory = sqlite3.Row
     try:
-        connection.execute("PRAGMA foreign_keys = ON")
-        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
-            raise HistoryError("не удалось включить внешние ключи")
-        connection.execute("PRAGMA trusted_schema = OFF")
-        trusted = connection.execute("PRAGMA trusted_schema").fetchone()
-        if trusted is None or trusted[0] != 0:
-            raise HistoryError("для истории требуется SQLite 3.31+ с trusted_schema")
-        connection.execute("PRAGMA cell_size_check = ON")
-        # Read both header fields in one snapshot. During the very first
-        # parallel import separate autocommit reads can straddle schema setup.
-        connection.execute("BEGIN IMMEDIATE" if create else "BEGIN")
-        application = connection.execute("PRAGMA application_id").fetchone()[0]
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if application == 0 and version == 0 and create:
-            if connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone():
-                raise HistoryError("файл содержит другую базу")
-            for statement in SCHEMA.split(";"):
-                if statement.strip():
-                    connection.execute(statement)
-            connection.execute(f"PRAGMA application_id = {APP_ID}")
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            application, version = APP_ID, SCHEMA_VERSION
-        if (application, version) != (APP_ID, SCHEMA_VERSION):
-            raise HistoryError("неподдерживаемая база истории")
-        if _schema_signature(connection) != _expected_schema_signature():
-            raise HistoryError("структура базы истории не совпадает со схемой fstec-lint")
-        if create:
-            connection.commit()
+        _prepare_connection(connection, write=create, initialize=create)
         yield connection
     finally:
         connection.close()
+
+
+@contextmanager
+def _connect(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connection]:
+    validate_db_path(path, [])
+    key_file = history_crypto.key_path()
+    if key_file is None:
+        with _connect_plain(path, create=create) as db:
+            yield db
+        return
+    key = history_crypto.load_key(key_file)
+    with history_crypto.writer_lock(path) if create else nullcontext():
+        _check_history_file(path)
+        exists = path.exists()
+        db = history_crypto.memory_database()
+        try:
+            if exists or not create:
+                history_crypto.open_snapshot(db, path, key)
+            _prepare_connection(db, write=create, initialize=create and not exists)
+            if create:
+                history_crypto.limit_growth(db)
+            before_changes = db.total_changes
+            yield db
+            if create and (not exists or db.total_changes != before_changes):
+                if db.in_transaction:
+                    raise HistoryError("изменения SQLite не зафиксированы")
+                history_crypto.save_snapshot(db, path, key)
+        finally:
+            db.close()
+
+
+def encrypt_history(source: Path, destination: Path) -> None:
+    key_file = history_crypto.key_path()
+    if key_file is None:
+        raise HistoryError(f"укажите файл ключа через {history_crypto.KEY_ENV}")
+    validate_db_path(destination, [source])
+    key = history_crypto.load_key(key_file)
+    with history_crypto.writer_lock(destination):
+        # Refuse even a dangling symlink or an empty existing destination.
+        if destination.exists() or destination.is_symlink():
+            raise HistoryError("путь для зашифрованной копии уже занят")
+        with _connect_plain(source) as original:
+            history_crypto.check_snapshot_size(original)
+            db = history_crypto.memory_database()
+            try:
+                original.backup(db)
+                if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                    raise HistoryError("исходная база SQLite повреждена")
+                if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                    raise HistoryError("в исходной истории нарушены внешние ключи")
+                # A backup can inherit WAL format bytes from disk, even though the
+                # connection reports journal_mode=memory. Rebuild the memory copy
+                # so deserialization does not try to open external WAL files.
+                db.execute("VACUUM")
+                history_crypto.save_snapshot(db, destination, key)
+            finally:
+                db.close()
 
 
 def record_run(
@@ -504,6 +583,11 @@ def _parser() -> argparse.ArgumentParser:
     importing.add_argument("--runner-version", required=True)
     importing.add_argument("--profile", required=True)
     importing.add_argument("--run-key")
+    key = operations.add_parser("init-key", help="создать новый случайный ключ истории")
+    key.add_argument("key", type=Path)
+    encrypt = operations.add_parser("encrypt", help="сделать зашифрованную копию базы SQLite")
+    encrypt.add_argument("source", type=Path)
+    encrypt.add_argument("destination", type=Path)
     return parser
 
 
@@ -515,6 +599,12 @@ def main(argv: list[str]) -> int:
             result = list_runs(args.db, args.project)
         elif args.operation == "diff":
             result = compare(args.db, args.old, args.new)
+        elif args.operation == "init-key":
+            history_crypto.init_key(args.key)
+            result = {"created": True}
+        elif args.operation == "encrypt":
+            encrypt_history(args.source, args.destination)
+            result = {"encrypted": True}
         else:
             validate_db_path(args.db, [args.report])
             run_id, inserted = record_run(

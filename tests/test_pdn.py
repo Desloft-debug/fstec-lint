@@ -14,7 +14,13 @@ from fstec_lint.engine import filter_by_uz, load_rules
 
 def test_listed_order_21_mappings_match_the_source():
     rules = load_rules()
-    assert {rule.id for rule in rules if not rule.pdn_measure} == {"C018", "C019", "C020"}
+    assert {rule.id for rule in rules if not rule.pdn_measure} == {
+        "C018",
+        "C019",
+        "C020",
+        "U006",
+        "U007",
+    }
     for rule in rules:
         if not rule.pdn_measure:
             assert not rule.pdn_measure_title

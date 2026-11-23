@@ -89,6 +89,7 @@ def parse_postgresql_conf(path: Path, scan_root: Path | None = None) -> PostgreS
     """Разбирает postgresql.conf в ConfigMap {параметр: значение}, ключи в нижнем регистре."""
     settings = PostgreSQLConfig()
     reader = BoundedReader(scan_root or path.parent)
+    entry = reader.checked(path)
 
     def read(file: Path, stack: tuple[Path, ...]) -> None:
         file = reader.checked(file)
@@ -131,11 +132,17 @@ def parse_postgresql_conf(path: Path, scan_root: Path | None = None) -> PostgreS
                 elif "'" in value or '"' in value or any(c.isspace() for c in value):
                     raise ValueError("invalid PostgreSQL setting")
             value = value.strip().strip("'\"")
-            settings.set(
-                key, value, lineno if file == path.resolve() else SourceLine(lineno, str(file))
-            )
+            settings.set(key, value, lineno if file == entry else SourceLine(lineno, str(file)))
 
-    read(path, ())
+    read(entry, ())
+    # The data directory is not inferred from the host. A sibling auto.conf
+    # represents a local snapshot whose declarations override the base file.
+    if path.name == "postgresql.conf":
+        try:
+            auto = reader.local_include(entry.parent / "postgresql.auto.conf")
+        except FileNotFoundError:
+            return settings
+        read(auto, (entry,))
     return settings
 
 
