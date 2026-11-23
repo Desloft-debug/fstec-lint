@@ -1,6 +1,6 @@
 # История изменений
 
-## [1.1.0.dev0]
+## [1.1.0]
 
 - 62 правила вместо 56. Добавлены C018–C020, P009, U006 и U007; уточнены
   проверки Compose, Dockerfile, PostgreSQL, OpenSSH, systemd и nginx.
