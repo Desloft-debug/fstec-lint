@@ -92,6 +92,27 @@ jobs:
       - run: pip install -e ".[dev]" -c constraints.txt
       - run: pytest tests/ -v --cov=fstec_lint --cov-report=term-missing
 
+  test-windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]" -c constraints.txt
+      - name: Run tests
+        shell: pwsh
+        run: |
+          Remove-Item Env:FSTEC_LINT_HISTORY_KEY_FILE -ErrorAction SilentlyContinue
+          $testTemp = Join-Path $env:RUNNER_TEMP 'fstec-pytest'
+          New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
+          $env:TEMP = $env:TMP = $env:TMPDIR = $env:PYTEST_DEBUG_TEMPROOT = $testTemp
+          python -m pytest tests/ -q --cov=fstec_lint --cov-report=term
+
   self-scan:
     runs-on: ubuntu-latest
     needs: test

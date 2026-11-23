@@ -92,6 +92,7 @@ def test_policy_runtime_remain_separate(harness, monkeypatch):
     assert row["policy_runtime_disagreement"] is True
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux process groups")
 def test_successful_setup_cleans_process_group(tmp_path, monkeypatch):
     calls = []
 

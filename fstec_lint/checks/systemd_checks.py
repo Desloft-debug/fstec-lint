@@ -108,10 +108,50 @@ def check_protect_home(unit: dict) -> CheckResults:
     return []
 
 
+_KERNEL_RESTRICTIONS = {"U006": "ProtectKernelTunables", "U007": "ProtectKernelModules"}
+_FALSE_BOOLEANS = frozenset({"false", "no", "off", "0", "n", "f"})
+_TRUE_BOOLEANS = TRUE_VALUES | {"y", "t"}
+
+
+def has_unresolved_restriction(unit: dict, code: str) -> bool:
+    directive = _KERNEL_RESTRICTIONS.get(code)
+    if directive is None:
+        return False
+    value = _service(unit).get(directive)
+    return value is not None and str(value).strip().lower() not in (
+        _TRUE_BOOLEANS | _FALSE_BOOLEANS
+    )
+
+
+def _check_explicit_disabled(unit: dict, directive: str, description: str) -> CheckResults:
+    service = _service(unit)
+    if str(service.get(directive, "")).strip().lower() in _FALSE_BOOLEANS:
+        return [(f"[Service]: {directive}", description, config_line(service, directive))]
+    return []
+
+
+def check_kernel_tunables(unit: dict) -> CheckResults:
+    return _check_explicit_disabled(
+        unit,
+        "ProtectKernelTunables",
+        "Явно отключено ограничение записи в параметры ядра через ProtectKernelTunables",
+    )
+
+
+def check_kernel_modules(unit: dict) -> CheckResults:
+    return _check_explicit_disabled(
+        unit,
+        "ProtectKernelModules",
+        "Явно отключено ограничение загрузки модулей ядра через ProtectKernelModules",
+    )
+
+
 REGISTRY = {
     "U001": check_runs_as_root,
     "U002": check_no_new_privileges,
     "U003": check_protect_system,
     "U004": check_private_tmp,
     "U005": check_protect_home,
+    "U006": check_kernel_tunables,
+    "U007": check_kernel_modules,
 }

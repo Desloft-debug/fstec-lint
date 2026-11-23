@@ -43,42 +43,55 @@ class SystemdDropInError(ValueError):
     """The local set of overrides cannot be evaluated without guessing."""
 
 
+def _scope_names(unit: str) -> list[str]:
+    """Return local drop-in scopes from most to least specific."""
+    stem = unit.removesuffix(".service")
+    scopes: dict[str, None] = {}
+
+    def collect(name: str) -> None:
+        if name in scopes:
+            return
+        scopes[name] = None
+        prefix, at, instance = name.partition("@")
+        if at and instance:
+            collect(prefix + "@")
+
+        dash = prefix.rfind("-")
+        if dash == len(prefix) - 1:
+            dash = prefix.rfind("-", 0, dash)
+        if dash > 0:
+            suffix = at + instance if instance else ""
+            collect(prefix[: dash + 1] + suffix)
+
+    collect(stem)
+    return [*(name + ".service.d" for name in scopes), "service.d"]
+
+
 def _local_drop_ins(entry: Path, reader: BoundedReader) -> list[Path]:
-    directory = entry.parent
-    stem = entry.name.removesuffix(".service")
-    broader = {"service.d"}
-    if "@" in stem and not stem.endswith("@"):
-        broader.add(stem.split("@", 1)[0] + "@.service.d")
-    for index, char in enumerate(stem):
-        if char == "-":
-            broader.add(stem[: index + 1] + ".service.d")
-    exact = entry.name + ".d"
-    for name in sorted(broader - {exact}):
+    # Priority breaks basename ties; the remaining files sort by name.
+    winners: dict[str, Path] = {}
+    for name in _scope_names(entry.name):
         try:
-            reader.local_include(directory / name)
+            fragment_dir = reader.local_include(entry.parent / name)
         except FileNotFoundError:
             continue
-        raise SystemdDropInError("обнаружен общий или шаблонный каталог systemd")
-    try:
-        fragment_dir = reader.local_include(directory / exact)
-    except FileNotFoundError:
-        return []
-    paths: list[Path] = []
-    with os.scandir(fragment_dir) as entries:
-        for item in entries:
-            reader.work += 1
-            if reader.work > 16384:
-                raise SystemdDropInError("превышен предел фрагментов systemd")
-            if item.name.startswith(".") or not item.name.endswith(".conf"):
-                continue
-            if len(paths) >= 255:
-                raise SystemdDropInError("превышен предел фрагментов systemd")
-            paths.append(reader.local_include(Path(item.path)))
-    return sorted(paths, key=lambda item: item.name.encode("utf-8"))
+        with os.scandir(fragment_dir) as entries:
+            for item in entries:
+                reader.work += 1
+                if reader.work > 16384:
+                    raise SystemdDropInError("превышен предел фрагментов systemd")
+                if item.name.startswith(".") or not item.name.endswith(".conf"):
+                    continue
+                if item.name in winners:
+                    continue
+                if len(winners) >= 255:
+                    raise SystemdDropInError("превышен предел фрагментов systemd")
+                winners[item.name] = reader.local_include(Path(item.path))
+    return [winners[name] for name in sorted(winners, key=os.fsencode)]
 
 
 def parse_systemd_unit(path: Path, scan_root: Path | None = None) -> dict[str, ConfigMap]:
-    """Scan one unit and its adjacent exact-name drop-ins, not the live manager."""
+    """Scan one unit and adjacent drop-in scopes, not the live manager."""
     sections: dict[str, ConfigMap] = {}
     reader = BoundedReader(scan_root or path.parent)
     entry = reader.checked(path)

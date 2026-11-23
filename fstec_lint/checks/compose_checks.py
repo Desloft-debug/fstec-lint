@@ -98,7 +98,6 @@ def _is_dynamic(value: object) -> bool:
 
 
 def _any_dynamic(value: object) -> bool:
-    # Only used on narrowly selected, already shape-checked fields.
     if isinstance(value, (list, dict)):
         entries = value.values() if isinstance(value, dict) else value
         return any(_is_dynamic(entry) for entry in entries)
@@ -194,6 +193,15 @@ def _line(compose: dict, service: str, *keys: str) -> int | None:
         return key_line(service, *keys)
     service_line = getattr(compose, "service_line", None)
     return service_line(service) if service_line else None
+
+
+def _entry_line(compose: dict, service: str, field: str, entry: str | int) -> int | None:
+    entry_line = getattr(compose, "entry_line", None)
+    return (
+        entry_line(service, field, entry)
+        if callable(entry_line)
+        else _line(compose, service, field)
+    )
 
 
 def check_root_user(compose: dict) -> CheckResults:
@@ -297,7 +305,9 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
             else:
                 # '$$ecret' — экранированный литерал, а не подстановка.
                 detail = f"переменная {key} содержит секрет в открытом виде"
-            findings.append((f"service:{name}", detail, _line(compose, name, "environment")))
+            findings.append(
+                (f"service:{name}", detail, _entry_line(compose, name, "environment", key))
+            )
     return findings
 
 
@@ -360,9 +370,9 @@ _BIND_WORDING = {
 
 def _exposed_ports(
     svc: dict, watched: set[str], *, tcp_only: bool = False
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, int]]:
     hits = []
-    for entry in as_list(svc.get("ports")):
+    for index, entry in enumerate(as_list(svc.get("ports"))):
         binding = _port_entry(entry)
         if binding is None:
             continue
@@ -375,20 +385,20 @@ def _exposed_ports(
             continue
         hit = next((port for port in sorted(watched, key=int) if start <= int(port) <= end), None)
         if hit is not None:
-            hits.append((hit, scope))
+            hits.append((hit, scope, index))
     return hits
 
 
 def check_exposed_sensitive_ports(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        for port, scope in _exposed_ports(svc, SENSITIVE_PORTS):
+        for port, scope, index in _exposed_ports(svc, SENSITIVE_PORTS):
             findings.append(
                 (
                     f"service:{name}",
                     f"порт контейнера {port} {_BIND_WORDING[scope]}; "
                     "достижимость по сети не подтверждена",
-                    _line(compose, name, "ports"),
+                    _entry_line(compose, name, "ports", index),
                 )
             )
     return findings
@@ -499,13 +509,13 @@ def check_docker_api_exposed(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
-        for container_port, scope in _exposed_ports(svc, DOCKER_API_PORTS, tcp_only=True):
+        for container_port, scope, index in _exposed_ports(svc, DOCKER_API_PORTS, tcp_only=True):
             findings.append(
                 (
                     f"service:{name}",
                     f"типовой TCP-порт Docker API ({container_port}) {_BIND_WORDING[scope]}; "
                     "сервис, TLS и аутентификация не подтверждены",
-                    _line(compose, name, "ports"),
+                    _entry_line(compose, name, "ports", index),
                 )
             )
     return findings
@@ -574,7 +584,7 @@ def check_missing_healthcheck(compose: dict) -> CheckResults:
                 (
                     f"service:{name}",
                     "не задан healthcheck — отказ сервиса не будет обнаружен автоматически",
-                    _line(compose, name, "healthcheck"),
+                    _entry_line(compose, name, "healthcheck", "disable" if disabled else "test"),
                 )
             )
     return findings
@@ -593,7 +603,7 @@ def check_debug_mode_enabled(compose: dict) -> CheckResults:
                         f"service:{name}",
                         f"{label} — режим отладки включён, приложение может "
                         "раскрывать трассировки и внутренние данные",
-                        _line(compose, name, "environment"),
+                        _entry_line(compose, name, "environment", key),
                     )
                 )
     return findings
@@ -834,7 +844,7 @@ def _unresolved_service(compose: dict, svc: dict, rule_id: str) -> bool:
         return _is_dynamic(healthcheck.get("disable")) or _is_dynamic(operator)
     if rule_id == "C016":
         networks = svc.get("networks")
-        # Mapping keys (network names) are not interpolated in Compose.
+        # Compose does not interpolate mapping keys.
         return _is_dynamic(svc.get("network_mode")) or (
             isinstance(networks, list) and _any_dynamic(networks)
         )

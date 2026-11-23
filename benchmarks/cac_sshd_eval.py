@@ -231,7 +231,7 @@ def snapshot(directory: Path) -> dict:
             return {"files": files, "truncated": True}
         with path.open("rb") as stream:
             data = stream.read(LOG_LIMIT + 1)
-        files[str(path.relative_to(directory))] = {
+        files[path.relative_to(directory).as_posix()] = {
             "content": data[:LOG_LIMIT].decode("utf-8", errors="replace"),
             "truncated": len(data) > LOG_LIMIT,
         }

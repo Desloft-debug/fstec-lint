@@ -594,11 +594,19 @@ def _run_registry(
                     if checking_coverage and isinstance(data, ComposeFile)
                     else ()
                 )
-                unresolved = bool(subjects) or (
-                    checking_coverage
-                    and parse is parse_dockerfile
-                    and rule.id == "D004"
-                    and not dockerfile_checks.has_resolved_base_images(data)
+                unresolved = (
+                    bool(subjects)
+                    or (
+                        checking_coverage
+                        and parse is parse_dockerfile
+                        and rule.id == "D004"
+                        and not dockerfile_checks.has_resolved_base_images(data)
+                    )
+                    or (
+                        checking_coverage
+                        and registry is systemd_checks.REGISTRY
+                        and systemd_checks.has_unresolved_restriction(data, rule.id)
+                    )
                 )
                 if unresolved and strict_scope:
                     result.errors.append(
@@ -764,7 +772,7 @@ def scan(
 
     compose_parser: Callable[[Path], Any] = parse_compose
     if compose_files:
-        sequence = tuple(path if path.is_absolute() else root / path for path in compose_files)
+        sequence = tuple(path if path.is_absolute() else boundary / path for path in compose_files)
         files["compose"] = [sequence[0]]
 
         def parse_selected_compose(_entry: Path) -> ComposeFile:

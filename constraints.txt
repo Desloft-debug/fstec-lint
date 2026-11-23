@@ -13,6 +13,7 @@ ruff==0.16.5
 mypy==1.19.1
 types-PyYAML==6.0.12.20260815
 PyYAML==6.0.2
+cryptography==50.0.0
 
 # Benchmark regression tests render ComplianceAsCode templates.
 Jinja2==3.1.6

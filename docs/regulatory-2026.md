@@ -16,6 +16,10 @@
 | C020 | Сервис явно включает `use_api_socket` | ЗКО.3: проверить, оправдан ли делегированный доступ к API и чем ограничены полномочия |
 | P006 | Отсутствует явный SCRAM или задан другой алгоритм | ИАФ.3: проверяется исходный файл; отсутствие параметра не значит, что включён MD5 |
 | P009 | В HBA настроен устаревающий метод `md5` | ИАФ.3: настройка может привести к SCRAM при сохранённом SCRAM-верификаторе; фактический протокол не определяется |
+| U006 | В службе явно выключен `ProtectKernelTunables` | П. 63 б) № 117 и УПД.2: смежная связь, запись в параметры ядра не проверяется |
+| U007 | В службе явно выключен `ProtectKernelModules` | П. 63 б) № 117 и УПД.2: смежная связь, возможности работающего процесса не измеряются |
+
+[УПД.2: разграничение и контроль прав доступа](https://www.consultant.ru/document/cons_doc_LAW_531896/6cb2ce03ee2c5d90841b189ee42696508d31a4d0/) · [systemd.exec: ограничения доступа к ядру](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#ProtectKernelTunables=).
 
 [Текст ЗКО.5](https://service.securitm.ru/docs/metod-doc-fstek-zashit-informat/zko-5-izoliaciia-konteinerov-v-konteinernoi-srede) · [Текст ЗКО.3](https://service.securitm.ru/docs/metod-doc-fstek-zashit-informat/4-5-zashhita-texnologii-konteinernyx-sred-i-ix-orkestracii-zko) · [Compose: делегирование API](https://docs.docker.com/reference/compose-file/services/#use_api_socket) · [PostgreSQL 14: изменение значения по умолчанию](https://www.postgresql.org/docs/14/release-14.html) · [Руководство Jatoba, таблица 17.2](https://www.gaz-is.ru/component/jdownloads/send/44-jatoba/464-rukovodstvo-po-bezopasnosti-subd-jatoba).
 

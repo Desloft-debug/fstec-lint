@@ -113,6 +113,7 @@ def test_command_interlock(ssh, monkeypatch):
         ssh.command([sys.executable, "-c", "pass"])
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux process groups")
 def test_command_timeout_and_logs(ssh, monkeypatch):
     # Only a disposable, harmless Python subprocess; no shell scenario is executed.
     monkeypatch.setattr(ssh, "require_isolated_container", lambda: None)
