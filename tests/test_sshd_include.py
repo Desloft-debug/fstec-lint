@@ -4,7 +4,6 @@ First-value/order and per-file Match scope follow the supported OLD static parse
 contract, not a claim to reproduce every OpenSSH build and effective configuration.
 """
 
-import builtins
 import os
 import subprocess
 from pathlib import Path
@@ -76,9 +75,8 @@ def test_external_include_is_rejected_before_io(tmp_path, monkeypatch, absolute,
 
         return opened
 
-    monkeypatch.setattr(builtins, "open", observe(builtins.open))
-    monkeypatch.setattr(Path, "open", observe(Path.open))
-    sibling.read_text(encoding="utf-8")
+    monkeypatch.setattr(os, "open", observe(os.open))
+    os.close(os.open(sibling, os.O_RDONLY))
     assert reads, "positive I/O calibration"
     reads.clear()
     result = scan(path if direct else root, select=["S001"])
@@ -179,16 +177,16 @@ def test_include_external_directory_link_never_reads_outside(tmp_path, monkeypat
         except (OSError, NotImplementedError) as error:
             pytest.skip(f"symlink unavailable: {type(error).__name__}: {error}")
     assert link.resolve() == outside.parent.resolve()
-    original = Path.open
+    original = os.open
     reads = []
 
     def opened(path, *args, **kwargs):
-        if path.resolve() == outside.resolve():
+        if Path(path).resolve() == outside.resolve():
             reads.append(str(path))
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", opened)
-    outside.read_text(encoding="utf-8")
+    monkeypatch.setattr(os, "open", opened)
+    os.close(os.open(outside, os.O_RDONLY))
     assert reads
     reads.clear()
     result = scan(selected, select=["S001"])

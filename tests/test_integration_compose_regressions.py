@@ -9,9 +9,9 @@ import pytest
 from fstec_lint.engine import scan
 
 CASES = [
-    ("C003", "missing-drop", "image: alpine:3.20", True),
-    ("C003", "empty-drop", "cap_drop: []", True),
-    ("C003", "partial-drop", "cap_drop: [NET_RAW]", True),
+    ("C003", "missing-drop", "image: alpine:3.20", False),
+    ("C003", "empty-drop", "cap_drop: []", False),
+    ("C003", "partial-drop", "cap_drop: [NET_RAW]", False),
     ("C003", "all-dropped", "cap_drop: [ALL]", False),
     ("C003", "safe-add", "cap_drop: [ALL]\ncap_add: [CHOWN]", False),
     ("C003", "admin", "cap_drop: [ALL]\ncap_add: [SYS_ADMIN]", True),

@@ -7,13 +7,10 @@ import os
 import stat
 import sys
 from pathlib import Path
-from typing import BinaryIO
 
 
-def _opened_path(source: BinaryIO) -> Path:
+def _opened_path(fd: int) -> Path:
     """Identify the opened object before reading, or fail closed."""
-    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-        raise ValueError("configuration is not a regular file")
     if sys.platform == "win32":
         import ctypes
         import msvcrt
@@ -22,7 +19,7 @@ def _opened_path(source: BinaryIO) -> Path:
         get_name = ctypes.windll.kernel32.GetFinalPathNameByHandleW
         get_name.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
         get_name.restype = wintypes.DWORD
-        handle = msvcrt.get_osfhandle(source.fileno())
+        handle = msvcrt.get_osfhandle(fd)
         length = get_name(handle, None, 0, 0)
         if not length or length > 32767:
             raise ValueError("cannot validate opened configuration")
@@ -36,7 +33,7 @@ def _opened_path(source: BinaryIO) -> Path:
         elif name.startswith("\\\\?\\"):
             name = name[4:]
         return Path(name)
-    link = Path(f"/proc/self/fd/{source.fileno()}")
+    link = Path(f"/proc/self/fd/{fd}")
     try:
         name = os.readlink(link)
     except OSError:
@@ -44,6 +41,33 @@ def _opened_path(source: BinaryIO) -> Path:
     if not name.startswith("/") or name.endswith(" (deleted)"):
         raise ValueError("cannot validate opened configuration")
     return Path(name)
+
+
+def read_regular_bytes(path: Path, limit: int, *, root: Path | None = None) -> bytes:
+    """Read at most limit bytes, optionally confined to a pre-resolved root."""
+    if limit < 0:
+        raise ValueError("negative read limit")
+    if root is not None:
+        path = path.resolve(strict=True)
+        if not path.is_relative_to(root):
+            raise ValueError("file outside scan root")
+    # Reject known special files before opening, then recheck the opened object.
+    # O_NONBLOCK prevents a replacement FIFO from blocking before the recheck.
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("input is not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    if root is not None:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("input is not a regular file")
+        if root is not None and not _opened_path(fd).is_relative_to(root):
+            raise ValueError("opened file outside scan root")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            return source.read(limit)
+    finally:
+        os.close(fd)
 
 
 class SourceLine(int):
@@ -75,19 +99,46 @@ class BoundedReader:
             raise ValueError("include outside scan root")
         return resolved
 
+    def local_include(self, path: Path) -> Path:
+        """Validate a local fragment without following links or checking external paths."""
+        if path.as_posix().startswith(("//", chr(92) * 2)) or (
+            path.anchor and not path.is_absolute()
+        ):
+            raise ValueError("non-local include")
+        absolute = path if path.is_absolute() else self.root / path
+        if not absolute.is_relative_to(self.root):
+            raise ValueError("include outside scan root")
+        parts = absolute.relative_to(self.root).parts
+        # Reject escapes syntactically even when an optional path is absent.
+        depth = 0
+        for component in parts:
+            depth += -1 if component == ".." else 1
+            if depth < 0:
+                raise ValueError("include outside scan root")
+        node = self.root
+        for index, component in enumerate(parts):
+            if component == "..":
+                node = node.parent
+                continue
+            node = node / component
+            info = node.lstat()
+            reparse = getattr(info, "st_file_attributes", 0) & getattr(
+                stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0
+            )
+            if stat.S_ISLNK(info.st_mode) or reparse:
+                raise ValueError("include link is not supported")
+            if index < len(parts) - 1 and not stat.S_ISDIR(info.st_mode):
+                raise ValueError("include parent is not a directory")
+        return node
+
     def read(self, path: Path, stack: tuple[Path, ...] = ()) -> str:
         resolved = self.checked(path)
         if resolved in stack:
             raise ValueError("include cycle")
         if len(stack) >= 16 or self.files >= 256:
             raise ValueError("include resource limit exceeded")
-        if not resolved.is_file():
-            raise ValueError("include is not a regular file")
         self.files += 1
-        with resolved.open("rb") as source:
-            if not _opened_path(source).is_relative_to(self.root):
-                raise ValueError("opened file outside scan root")
-            raw = source.read(self.max_bytes - self.size + 1)
+        raw = read_regular_bytes(resolved, self.max_bytes - self.size + 1, root=self.root)
         self.size += len(raw)
         if self.size > self.max_bytes:
             raise ValueError("include resource limit exceeded")
@@ -135,9 +186,9 @@ class BoundedReader:
                 raise ValueError("include is not a regular file")
         return sorted(files, key=lambda p: str(p))
 
-    def postgresql_include_dir(self, directory: Path) -> list[Path]:
+    def postgresql_include_dir(self, directory: Path, *, no_links: bool = False) -> list[Path]:
         """Order by directory entry names, before resolving their targets."""
-        directory = self.checked(directory)
+        directory = self.local_include(directory) if no_links else self.checked(directory)
         if not directory.is_dir():
             raise ValueError("include directory missing")
         files: list[Path] = []
@@ -148,9 +199,14 @@ class BoundedReader:
                     raise ValueError("include expansion limit exceeded")
                 if entry.name.startswith(".") or not entry.name.endswith(".conf"):
                     continue
-                if entry.is_dir():
+                if entry.is_dir(follow_symlinks=not no_links):
                     continue
                 candidate = Path(entry.path)
+                if no_links:
+                    # Validate each fragment during parsing, so one rejected
+                    # entry does not hide valid siblings.
+                    files.append(candidate)
+                    continue
                 resolved = self.checked(candidate)
                 if not resolved.is_file():
                     raise ValueError("include is not a regular file")

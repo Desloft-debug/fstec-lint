@@ -8,9 +8,11 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Callable
 from functools import wraps
+from ipaddress import IPv6Address, ip_address
 
 from ..parsers.compose import MAX_YAML_DEPTH, MAX_YAML_EXPANDED_COST
 from .base import CheckResult, CheckResults, as_list, is_root_user
@@ -20,7 +22,6 @@ SECRET_KEY_RE = re.compile(
     r"(PASSWORD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)", re.IGNORECASE
 )
 DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "ALL", "SYS_PTRACE", "SYS_MODULE"}
-SAFE_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 DOCKER_API_PORTS = {"2375", "2376"}
 SENSITIVE_HOST_MOUNTS = {"/etc", "/proc", "/sys", "/var/run", "/boot", "/root"}
 DEBUG_KEY_RE = re.compile(r"DEBUG$", re.IGNORECASE)
@@ -86,12 +87,30 @@ def _scalar(value: object) -> bool:
     return type(value) in (str, int, float, bool, type(None))
 
 
+_INTERPOLATION = re.compile(r"\$\$|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _is_dynamic(value: object) -> bool:
+    """A Compose variable reference (including mixed strings), not an escaped dollar."""
+    return isinstance(value, str) and any(
+        match.group() != "$$" for match in _INTERPOLATION.finditer(value)
+    )
+
+
+def _any_dynamic(value: object) -> bool:
+    # Only used on narrowly selected, already shape-checked fields.
+    if isinstance(value, (list, dict)):
+        entries = value.values() if isinstance(value, dict) else value
+        return any(_is_dynamic(entry) for entry in entries)
+    return _is_dynamic(value)
+
+
 def _compose_boolean(value: object) -> bool | None:
     """Match compose-go toBoolean literals; leave interpolation unresolved."""
     if value is None or type(value) is bool:
         return value
     if isinstance(value, str):
-        if ENV_SUBSTITUTION_RE.fullmatch(value):
+        if _is_dynamic(value):
             return None
         lowered = value.lower()
         if lowered in {"true", "y", "yes", "on"}:
@@ -182,19 +201,21 @@ def check_root_user(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
-        if "user" not in svc:
+        user = svc.get("user")
+        if user is None or user == "":
             findings.append(
                 (
                     f"service:{name}",
-                    "нет директивы 'user' — процесс в контейнере выполняется от root",
+                    "пользователь не задан в Compose; используется настройка образа, "
+                    "которая этим правилом не проверяется",
                     _line(compose, name, "user"),
                 )
             )
-        elif is_root_user(svc["user"]):
+        elif not _is_dynamic(user) and is_root_user(user):
             findings.append(
                 (
                     f"service:{name}",
-                    f"user: {svc['user']} — процесс в контейнере явно запущен от root",
+                    "в Compose явно указан root/uid 0; состояние контейнера не проверено",
                     _line(compose, name, "user"),
                 )
             )
@@ -222,15 +243,13 @@ def check_dangerous_capabilities(compose: dict) -> CheckResults:
             continue
         caps = as_list(svc.get("cap_add"))
         bad = [str(c) for c in caps if str(c).upper().removeprefix("CAP_") in DANGEROUS_CAPS]
-        missing_drop = not any(str(c).upper() == "ALL" for c in as_list(svc.get("cap_drop")))
-        if bad or missing_drop:
-            detail = []
-            if bad:
-                detail.append(f"добавлены опасные capabilities: {', '.join(bad)}")
-            if missing_drop:
-                detail.append("cap_drop не содержит ALL")
+        if bad:
             findings.append(
-                (f"service:{name}", "; ".join(detail), _line(compose, name, "cap_add", "cap_drop"))
+                (
+                    f"service:{name}",
+                    f"явно добавлены привилегии: {', '.join(bad)}",
+                    _line(compose, name, "cap_add"),
+                )
             )
     return findings
 
@@ -282,77 +301,93 @@ def check_secrets_in_environment(compose: dict) -> CheckResults:
     return findings
 
 
-def _port_is_exposed(entry: object) -> tuple[bool, list[str]]:
-    """Возвращает (публикуется_на_всех_интерфейсах, список container-портов).
-
-    Портов может быть несколько: '5432-5433:5432-5433' — валидная запись
-    диапазона, и каждый порт из него публикуется по-настоящему.
-    """
-    if isinstance(entry, dict):
-        target = str(entry.get("target", ""))
-        published = entry.get("published")
-        if published in (None, ""):
-            return False, _expand_ports(target)
-        return entry.get("host_ip") not in SAFE_LOOPBACK, _expand_ports(target)
-
-    text = str(entry)
-    host_ip: str | None = None
-    # IPv6-адрес хоста записывается в квадратных скобках: '[::1]:5432:5432'
-    if text.startswith("["):
-        closing = text.find("]")
-        if closing != -1:
-            host_ip = text[1:closing]
-            text = text[closing + 1 :].lstrip(":")
-
-    parts = text.split(":")
-    if host_ip is None and len(parts) == 3:
-        host_ip, _host_port, container_port = parts
-    elif len(parts) >= 2:
-        container_port = parts[-1]
-    else:
-        container_port = parts[0]
-    container_port = container_port.split("/")[0]
-    return host_ip not in SAFE_LOOPBACK, _expand_ports(container_port)
-
-
-def _expand_ports(value: str) -> list[str]:
-    """'5432' -> ['5432'], '5432-5434' -> ['5432', '5433', '5434']."""
-    value = value.strip()
-    if "-" not in value:
-        return [value] if value else []
-    start, _, end = value.partition("-")
+def _bind_scope(raw: object) -> str:
+    if raw in (None, ""):
+        return "default"
+    host = str(raw).strip().removeprefix("[").removesuffix("]")
+    if host.lower() == "localhost":  # preserve the offline loopback interpretation
+        return "loopback"
     try:
-        first, last = int(start), int(end)
+        address = ip_address(host)
     except ValueError:
-        return [value]
-    if last < first or last - first > 1024:  # защита от абсурдных диапазонов
-        return [value]
-    return [str(port) for port in range(first, last + 1)]
+        return "unknown"
+    if address.is_unspecified:
+        return "wildcard4" if address.version == 4 else "wildcard6"
+    mapped = address.ipv4_mapped if isinstance(address, IPv6Address) else None
+    if address.is_loopback or (mapped is not None and mapped.is_loopback):
+        return "loopback"
+    return "explicit"
 
 
-def _exposed_ports(svc: dict, watched: set[str]) -> list[tuple[object, str]]:
+def _port_entry(entry: object) -> tuple[str, str, str] | None:
+    # The presence of an entry under 'ports', even without a fixed host
+    # port, means publication. The optional 'published' selects that port.
+    if isinstance(entry, dict):
+        scope = _bind_scope(entry.get("host_ip"))
+        target = str(entry.get("target") or "")
+        protocol = str(entry.get("protocol") or "tcp")
+    elif isinstance(entry, (str, int)) and not isinstance(entry, bool):
+        text = str(entry)
+        if _is_dynamic(text):
+            return None  # A variable may also contribute separators.
+        host: str | None = None
+        if text.startswith("["):
+            closing = text.find("]:")
+            if closing < 0:
+                return None
+            host = text[1:closing]
+            text = text[closing + 2 :]
+        parts = text.rsplit(":", 2)
+        if host is None and len(parts) == 3:
+            host = parts[0]
+        target, _, protocol = parts[-1].partition("/")
+        scope = _bind_scope(host)
+        protocol = protocol or "tcp"
+    else:
+        return None
+    if re.fullmatch(r"[0-9]{1,5}(?:-[0-9]{1,5})?", target) is None:
+        return None
+    return scope, target, protocol.lower()
+
+
+_BIND_WORDING = {
+    "default": "публикуется без явного адреса привязки",
+    "wildcard4": "публикуется на всех интерфейсах IPv4",
+    "wildcard6": "публикуется на всех интерфейсах IPv6",
+    "explicit": "публикуется на явно заданном адресе вне loopback",
+}
+
+
+def _exposed_ports(
+    svc: dict, watched: set[str], *, tcp_only: bool = False
+) -> list[tuple[str, str]]:
     hits = []
-    for port_entry in as_list(svc.get("ports")):
-        exposed, container_ports = _port_is_exposed(port_entry)
-        if not exposed:
+    for entry in as_list(svc.get("ports")):
+        binding = _port_entry(entry)
+        if binding is None:
             continue
-        for container_port in container_ports:
-            if container_port in watched:
-                hits.append((port_entry, container_port))
-                break
+        scope, target, protocol = binding
+        if scope not in _BIND_WORDING or (tcp_only and protocol != "tcp"):
+            continue
+        first, _, last = target.partition("-")
+        start, end = int(first), int(last or first)
+        if not (1 <= start <= end <= 65535):
+            continue
+        hit = next((port for port in sorted(watched, key=int) if start <= int(port) <= end), None)
+        if hit is not None:
+            hits.append((hit, scope))
     return hits
 
 
 def check_exposed_sensitive_ports(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        if not isinstance(svc, dict):
-            continue
-        for port_entry, _container_port in _exposed_ports(svc, SENSITIVE_PORTS):
+        for port, scope in _exposed_ports(svc, SENSITIVE_PORTS):
             findings.append(
                 (
                     f"service:{name}",
-                    f"порт {port_entry} публикуется на все интерфейсы хоста",
+                    f"порт контейнера {port} {_BIND_WORDING[scope]}; "
+                    "достижимость по сети не подтверждена",
                     _line(compose, name, "ports"),
                 )
             )
@@ -365,7 +400,7 @@ def check_latest_tag(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         image = svc.get("image")
-        if not image:
+        if not image or _is_dynamic(image):
             continue
         if "@sha256:" in image:
             continue
@@ -374,7 +409,7 @@ def check_latest_tag(compose: dict) -> CheckResults:
             findings.append(
                 (
                     f"service:{name}",
-                    f"образ '{image}' использует тег :latest либо не закреплён по версии/digest",
+                    "для образа указан тег latest либо отсутствует явный тег или digest",
                     _line(compose, name, "image"),
                 )
             )
@@ -401,12 +436,15 @@ def check_docker_socket_mount(compose: dict) -> CheckResults:
         if not isinstance(svc, dict):
             continue
         for vol in as_list(svc.get("volumes")):
-            source = (
-                vol
-                if isinstance(vol, str)
-                else (vol.get("source", "") if isinstance(vol, dict) else "")
-            )
-            if "docker.sock" in str(source):
+            if isinstance(vol, str) and ":" in vol:
+                source = vol.split(":", 1)[0]
+                if not source.startswith(("/", ".", "~")):
+                    continue  # Named volume, not a host bind source.
+            elif isinstance(vol, dict) and vol.get("type") == "bind":
+                source = str(vol.get("source") or "")
+            else:
+                continue
+            if posixpath.basename(source.rstrip("/")) == "docker.sock":
                 findings.append(
                     (
                         f"service:{name}",
@@ -420,7 +458,11 @@ def check_docker_socket_mount(compose: dict) -> CheckResults:
 def check_no_read_only(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        if isinstance(svc, dict) and _compose_boolean(svc.get("read_only")) is not True:
+        if (
+            isinstance(svc, dict)
+            and not _is_dynamic(svc.get("read_only"))
+            and _compose_boolean(svc.get("read_only")) is not True
+        ):
             findings.append(
                 (
                     f"service:{name}",
@@ -441,7 +483,7 @@ def check_missing_no_new_privileges(compose: dict) -> CheckResults:
             re.fullmatch(r"no-new-privileges(?:\s*[:=]\s*(?:true|1))?", str(opt).strip(), re.I)
             for opt in sec_opt
         )
-        if not enabled:
+        if not enabled and not _any_dynamic(sec_opt):
             findings.append(
                 (
                     f"service:{name}",
@@ -457,49 +499,52 @@ def check_docker_api_exposed(compose: dict) -> CheckResults:
     for name, svc in _services(compose).items():
         if not isinstance(svc, dict):
             continue
-        for port_entry, _container_port in _exposed_ports(svc, DOCKER_API_PORTS):
+        for container_port, scope in _exposed_ports(svc, DOCKER_API_PORTS, tcp_only=True):
             findings.append(
                 (
                     f"service:{name}",
-                    f"порт {port_entry} — незащищённый Docker Engine API, "
-                    "доступ к нему эквивалентен root на хосте",
+                    f"типовой TCP-порт Docker API ({container_port}) {_BIND_WORDING[scope]}; "
+                    "сервис, TLS и аутентификация не подтверждены",
                     _line(compose, name, "ports"),
                 )
             )
     return findings
 
 
+def _positive_limit(value: object, *, memory: bool = False) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    text = str(value).strip()
+    pattern = (
+        r"(?:[0-9]+(?:\.[0-9]+)?)(?:[kKmMgGtT](?:[bB])?)?" if memory else r"[0-9]+(?:\.[0-9]+)?"
+    )
+    if not re.fullmatch(pattern, text):
+        return False
+    number = re.match(r"[0-9]+(?:\.[0-9]+)?", text)
+    return number is not None and float(number.group()) > 0
+
+
+def _limit_state(values: tuple[object, ...], *, memory: bool = False) -> str:
+    if any(_positive_limit(value, memory=memory) for value in values):
+        return "set"
+    return "unknown" if any(_is_dynamic(value) for value in values) else "missing"
+
+
+def _resource_limit_states(svc: dict) -> tuple[str, str]:
+    deploy = svc.get("deploy")
+    resources = deploy.get("resources", {}) if isinstance(deploy, dict) else {}
+    limits = resources.get("limits", {}) if isinstance(resources, dict) else {}
+    limits = limits if isinstance(limits, dict) else {}
+    return (
+        _limit_state((svc.get("cpus"), svc.get("cpu_quota"), limits.get("cpus"))),
+        _limit_state((svc.get("mem_limit"), limits.get("memory")), memory=True),
+    )
+
+
 def check_missing_resource_limits(compose: dict) -> CheckResults:
     findings = []
     for name, svc in _services(compose).items():
-        if not isinstance(svc, dict):
-            continue
-        deploy = svc.get("deploy")
-        resources = deploy.get("resources", {}) if isinstance(deploy, dict) else {}
-        limits = resources.get("limits", {}) if isinstance(resources, dict) else {}
-        limits = limits if isinstance(limits, dict) else {}
-
-        def positive(value: object, memory: bool = False) -> bool:
-            if isinstance(value, bool) or value is None:
-                return False
-            text = str(value).strip()
-            pattern = (
-                r"(?:[0-9]+(?:\.[0-9]+)?)(?:[kKmMgGtT](?:[bB])?)?"
-                if memory
-                else r"[0-9]+(?:\.[0-9]+)?"
-            )
-            if not re.fullmatch(pattern, text):
-                return False
-            number = re.match(r"[0-9]+(?:\.[0-9]+)?", text)
-            return number is not None and float(number.group()) > 0
-
-        cpu = (
-            positive(svc.get("cpus"))
-            or positive(svc.get("cpu_quota"))
-            or positive(limits.get("cpus"))
-        )
-        memory = positive(svc.get("mem_limit"), True) or positive(limits.get("memory"), True)
-        if not (cpu and memory):
+        if "missing" in _resource_limit_states(svc):
             findings.append(
                 (
                     f"service:{name}",
@@ -555,8 +600,6 @@ def check_debug_mode_enabled(compose: dict) -> CheckResults:
 
 
 def check_sensitive_host_mount(compose: dict) -> CheckResults:
-    import posixpath
-
     findings: list[CheckResult] = []
     volumes = compose.get("volumes", {})
     volumes = volumes if isinstance(volumes, dict) else {}
@@ -598,16 +641,224 @@ def check_sensitive_host_mount(compose: dict) -> CheckResults:
 
 
 def check_flat_network(compose: dict) -> CheckResults:
-    services = _services(compose)
-    if len(services) < 2:
-        return []
-    if any(isinstance(svc, dict) and svc.get("networks") for svc in services.values()):
+    sharing_default = []
+    for name, svc in _services(compose).items():
+        if svc.get("network_mode"):
+            continue
+        networks = svc.get("networks")
+        if not networks or isinstance(networks, (list, dict)) and "default" in networks:
+            sharing_default.append(name)
+    if len(sharing_default) < 2:
         return []
     return [
-        (f"service:{name}", "сервис не подключён к именованной сети", _line(compose, name))
-        for name, svc in services.items()
-        if isinstance(svc, dict) and svc.get("network_mode") != "host"
+        (
+            f"service:{name}",
+            "сервис делит сеть default с другими сервисами Compose; "
+            "обоснованность разделения и внешний доступ не проверены",
+            _line(compose, name, "networks"),
+        )
+        for name in sharing_default
     ]
+
+
+def _check_host_namespace(compose: dict, field: str) -> CheckResults:
+    return [
+        (
+            f"service:{name}",
+            f"{field}: host использует пространство имён хоста",
+            _line(compose, name, field),
+        )
+        for name, svc in _services(compose).items()
+        if svc.get(field) == "host"
+    ]
+
+
+def check_host_pid(compose: dict) -> CheckResults:
+    return _check_host_namespace(compose, "pid")
+
+
+def check_host_ipc(compose: dict) -> CheckResults:
+    return _check_host_namespace(compose, "ipc")
+
+
+def check_api_socket_delegation(compose: dict) -> CheckResults:
+    return [
+        (
+            f"service:{name}",
+            "use_api_socket делегирует сервису доступ к API Docker",
+            _line(compose, name, "use_api_socket"),
+        )
+        for name, svc in _services(compose).items()
+        if _compose_boolean(svc.get("use_api_socket")) is True
+    ]
+
+
+_HISTORY_FIELDS = {
+    "C001": "user",
+    "C002": "privileged",
+    "C006": "image",
+    "C007": "network_mode",
+    "C009": "read_only",
+    "C020": "use_api_socket",
+}
+
+
+def _watch_dynamic_ports(svc: dict, rule_id: str) -> bool:
+    watched = SENSITIVE_PORTS if rule_id == "C005" else DOCKER_API_PORTS
+    for entry in as_list(svc.get("ports")):
+        if isinstance(entry, dict):
+            if _bind_scope(entry.get("host_ip")) == "loopback":
+                continue
+            proto = entry.get("protocol")
+            if (
+                rule_id == "C011"
+                and proto
+                and not _is_dynamic(proto)
+                and str(proto).lower() != "tcp"
+            ):
+                continue
+            if _is_dynamic(entry.get("target")):
+                return True
+            binding = _port_entry(entry)
+            if binding is None:
+                continue
+            scope, target, _ = binding
+            first, _, last = target.partition("-")
+            if any(int(first) <= int(port) <= int(last or first) for port in watched) and (
+                scope == "unknown" or rule_id == "C011" and _is_dynamic(proto)
+            ):
+                return True
+        elif _is_dynamic(entry):
+            # A short-form variable may contribute a target or bind/address separators.
+            return True
+        else:
+            binding = _port_entry(entry)
+            if binding is not None and binding[0] == "unknown":
+                first, _, last = binding[1].partition("-")
+                if any(int(first) <= int(port) <= int(last or first) for port in watched) and (
+                    rule_id == "C005" or binding[2] == "tcp"
+                ):
+                    return True
+    return False
+
+
+def _watch_dynamic_volume(svc: dict, compose: dict, rule_id: str) -> bool:
+    volumes = compose.get("volumes")
+    for entry in as_list(svc.get("volumes")):
+        if isinstance(entry, dict):
+            kind = entry.get("type")
+            source = entry.get("source") or (entry.get("src") if rule_id == "C015" else None)
+        elif isinstance(entry, str):
+            if ":" not in entry:
+                if _is_dynamic(entry):
+                    return True
+                continue
+            kind = None
+            source = entry.split(":", 1)[0]
+        else:
+            continue
+        if rule_id == "C008":
+            if isinstance(entry, dict) and kind != "bind" and not _is_dynamic(kind):
+                continue
+            if _is_dynamic(source) or (
+                _is_dynamic(kind)
+                and isinstance(source, str)
+                and posixpath.basename(source.rstrip("/")) == "docker.sock"
+            ):
+                return True
+            continue
+        if kind not in (None, "bind", "volume") and not _is_dynamic(kind):
+            continue
+        if _is_dynamic(source) or (_is_dynamic(kind) and bool(source)):
+            return True
+        if (
+            rule_id == "C015"
+            and kind != "bind"
+            and isinstance(volumes, dict)
+            and isinstance(source, str)
+        ):
+            definition = volumes.get(source)
+            opts = definition.get("driver_opts") if isinstance(definition, dict) else None
+            if isinstance(opts, dict) and _is_dynamic(opts.get("device") or opts.get("mountpoint")):
+                return True
+    return False
+
+
+def _watch_dynamic_env(svc: dict, rule_id: str) -> bool:
+    env = svc.get("environment")
+    if isinstance(env, list):
+        for entry in env:
+            key, equal, value = entry.partition("=")
+            if _is_dynamic(key) and (equal or rule_id == "C014"):
+                return True
+            if rule_id == "C014" and DEBUG_KEY_RE.search(key) and (not equal or _is_dynamic(value)):
+                return True
+    elif isinstance(env, dict) and rule_id == "C014":
+        return any(
+            DEBUG_KEY_RE.search(str(key)) and (value is None or _is_dynamic(value))
+            for key, value in env.items()
+        )
+    return False
+
+
+def _unresolved_service(compose: dict, svc: dict, rule_id: str) -> bool:
+    if rule_id in _HISTORY_FIELDS:
+        return _is_dynamic(svc.get(_HISTORY_FIELDS[rule_id]))
+    if rule_id in {"C018", "C019"}:
+        value = svc.get("pid" if rule_id == "C018" else "ipc")
+        return value is not None and (
+            not isinstance(value, str) or _is_dynamic(value) or ":" in value
+        )
+    if rule_id == "C003":
+        return _any_dynamic(svc.get("cap_add"))
+    if rule_id in {"C004", "C014"}:
+        return _watch_dynamic_env(svc, rule_id)
+    if rule_id in {"C005", "C011"}:
+        return _watch_dynamic_ports(svc, rule_id)
+    if rule_id in {"C008", "C015"}:
+        return _watch_dynamic_volume(svc, compose, rule_id)
+    if rule_id == "C010":
+        return _any_dynamic(svc.get("security_opt"))
+    if rule_id == "C012":
+        states = _resource_limit_states(svc)
+        return "unknown" in states and "missing" not in states
+    if rule_id == "C013":
+        healthcheck = svc.get("healthcheck")
+        if not isinstance(healthcheck, dict):
+            return False
+        disabled = _compose_boolean(healthcheck.get("disable"))
+        test = healthcheck.get("test")
+        operator = test[0] if isinstance(test, list) and test else test
+        if disabled is True or isinstance(operator, str) and operator.strip().upper() == "NONE":
+            return False
+        return _is_dynamic(healthcheck.get("disable")) or _is_dynamic(operator)
+    if rule_id == "C016":
+        networks = svc.get("networks")
+        # Mapping keys (network names) are not interpolated in Compose.
+        return _is_dynamic(svc.get("network_mode")) or (
+            isinstance(networks, list) and _any_dynamic(networks)
+        )
+    if rule_id == "C017":
+        logging = svc.get("logging")
+        return isinstance(logging, dict) and _is_dynamic(logging.get("driver"))
+    return False
+
+
+def unresolved_services(compose: dict, rule_id: str) -> tuple[str, ...]:
+    """Names of services whose rule-relevant inputs cannot be resolved offline.
+
+    The engine already validates shared shape. No reads of project or host
+    environment happen here; a literal default is not the effective value
+    when a setting can be overridden.
+    """
+    services = compose.get("services") or {}
+    return tuple(
+        str(name) for name, svc in services.items() if _unresolved_service(compose, svc, rule_id)
+    )
+
+
+def has_unresolved_history_value(compose: dict, rule_id: str) -> bool:
+    return bool(unresolved_services(compose, rule_id))
 
 
 def check_logs_not_centralized(compose: dict) -> CheckResults:
@@ -653,6 +904,9 @@ def _service_scope(check: ComposeCheck) -> ComposeCheck:
 
 REGISTRY = {
     "C017": _service_scope(check_logs_not_centralized),
+    "C018": _service_scope(check_host_pid),
+    "C019": _service_scope(check_host_ipc),
+    "C020": _service_scope(check_api_socket_delegation),
     "C001": _service_scope(check_root_user),
     "C002": _service_scope(check_privileged),
     "C003": _service_scope(check_dangerous_capabilities),

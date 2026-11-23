@@ -83,7 +83,7 @@ def test_explicit_user_root_flagged():
     instructions = [_inst("FROM", "alpine:3.20"), _inst("USER", "root", 2)]
     findings = dc.check_missing_user(instructions)
     assert len(findings) == 1
-    assert "явно запускается от root" in findings[0][1]
+    assert "явно указан root/uid 0" in findings[0][1]
 
 
 def test_explicit_uid_zero_flagged():

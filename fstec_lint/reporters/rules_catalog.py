@@ -8,7 +8,7 @@ import json
 import re
 from collections import Counter
 
-from .. import maturity
+from .. import maturity, regulatory
 from ..models import Rule, Severity
 
 TARGET_LABELS = {
@@ -87,6 +87,10 @@ def render_text(rules: list[Rule]) -> str:
     coverage = _coverage(rules)
     summary = ", ".join(f"{group} ({count})" for group, count in sorted(coverage.items()))
     lines.append(f"Затронутые пункты приказа ФСТЭК N 117: {summary}")
+    lines.append(
+        "Справочные связи не подтверждают применимость или выполнение мер; "
+        "точные ссылки и пределы проверки доступны в каталоге JSON."
+    )
 
     directions = maturity.rules_by_direction(rules)
     if directions:
@@ -98,6 +102,7 @@ def render_text(rules: list[Rule]) -> str:
 def render_json(rules: list[Rule]) -> str:
     payload = {
         "total": len(rules),
+        "regulatory": regulatory.catalogue_context(),
         "measure_groups": dict(sorted(_coverage(rules).items())),
         "maturity_directions": {
             str(number): list(ids) for number, ids in maturity.rules_by_direction(rules).items()
@@ -109,6 +114,7 @@ def render_json(rules: list[Rule]) -> str:
                 "severity": rule.severity.name.lower(),
                 "target": rule.target,
                 "measure": rule.measure,
+                "regulatory": regulatory.metadata(rule),
                 "measure_title": rule.measure_title,
                 "measure_groups": measure_groups(rule),
                 "submeasure": rule.submeasure,

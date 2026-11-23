@@ -23,22 +23,25 @@ from .checks import (
 )
 from .checks.base import CheckResult, CheckResults
 from .models import Finding, Rule, Severity
-from .parsers.base import BoundedReader, SourceLine
+from .parsers.base import BoundedReader, SourceLine, read_regular_bytes
 from .parsers.compose import (
+    COMPOSE_V1_ERROR,
     MAX_FILE_BYTES,
+    ComposeFile,
     _BoundedLoader,
     _guard_graph,
     _guard_merges,
     parse_compose,
 )
+from .parsers.compose_merge import ComposeMergeError, parse_compose_files
 from .parsers.dockerfile import parse_dockerfile
 from .parsers.dotenv import EnvFile, parse_dotenv
 from .parsers.linux import parse_login_defs, parse_pwquality, parse_rsyslog, parse_useradd_defaults
 from .parsers.nginx import NginxConfig, parse_nginx
 from .parsers.postfix import parse_postfix_main
-from .parsers.postgres import PostgreSQLConfig, parse_pg_hba, parse_postgresql_conf
+from .parsers.postgres import HBARecords, PostgreSQLConfig, parse_pg_hba, parse_postgresql_conf
 from .parsers.sshd import parse_sshd_config
-from .parsers.systemd import parse_systemd_unit
+from .parsers.systemd import SystemdDropInError, parse_systemd_unit
 from .pdn import in_base_set
 
 RULES_DIR = Path(__file__).parent / "rules"
@@ -100,6 +103,19 @@ class ScanError:
 
     file: str
     message: str
+    code: str = "incomplete_scan"
+    rule_id: str | None = None
+    subjects: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CheckObservation:
+    """Выполнение одного правила для входного конфигурационного файла."""
+
+    file: Path
+    rule_id: str
+    status: str
+    findings: tuple[Finding, ...] = ()
 
 
 @dataclass
@@ -107,6 +123,24 @@ class ScanResult:
     findings: list[Finding] = field(default_factory=list)
     errors: list[ScanError] = field(default_factory=list)
     suppressed: int = 0
+    checks: list[CheckObservation] | None = None
+    files_checked: int = 0
+    coverage: dict[str, dict[str, int]] | None = None
+    declared_gis_class: str | None = None
+
+
+def _record(
+    result: ScanResult,
+    path: Path,
+    rule: Rule,
+    status: str,
+    findings: tuple[Finding, ...] = (),
+) -> None:
+    if result.checks is not None:
+        result.checks.append(CheckObservation(path, rule.id, status, findings))
+    if result.coverage is not None:
+        counts = result.coverage[rule.id]
+        counts[status] += 1
 
 
 class RulesError(ValueError):
@@ -116,13 +150,13 @@ class RulesError(ValueError):
 def load_rules(rules_dir: Path = RULES_DIR) -> list[Rule]:
     rules: list[Rule] = []
     try:
+        rules_dir = rules_dir.resolve(strict=True)
         rule_files = sorted(p for p in rules_dir.iterdir() if p.match("*.yaml"))
-    except OSError:
+    except (OSError, RuntimeError):
         raise RulesError("не удалось прочитать каталог правил") from None
     for yaml_file in rule_files:
         try:
-            with yaml_file.open("rb") as source:
-                content = source.read(MAX_FILE_BYTES + 1)
+            content = read_regular_bytes(yaml_file, MAX_FILE_BYTES + 1, root=rules_dir)
             if len(content) > MAX_FILE_BYTES:
                 raise ValueError("rules YAML resource limit exceeded")
             loader = _BoundedLoader(content.decode("utf-8"))
@@ -451,13 +485,6 @@ def _describe(exc: Exception) -> str:
     return name
 
 
-_COMPOSE_V1_ERROR = (
-    "нет ни одного ключа верхнего уровня современного compose "
-    "(configs, include, name, networks, secrets, services, version, volumes) — похоже на формат "
-    "docker-compose v1, который не поддерживается"
-)
-
-
 def _finding(rule: Rule, path: Path, item: CheckResult) -> Finding:
     """Собирает Finding из 3- или 4-элементного результата проверки."""
     location, detail, line = item[0], item[1], item[2]
@@ -481,17 +508,26 @@ def _run_registry(
     registry: Mapping[str, CheckFn],
     parse: Callable[[Path], Any],
     boundary: Path | None,
+    *,
+    inline_exceptions: bool,
+    strict_scope: bool,
+    compose_overlay: bool = False,
 ) -> None:
     included: set[Path] = set()
     for path in paths:
-        if path.resolve() in included:
-            continue
         # Один битый или бинарный файл не должен ронять весь прогон:
         # имя файла с расширением .service ещё не гарантирует, что внутри
         # текстовый юнит systemd.
         try:
-            if boundary is not None and not path.resolve(strict=True).is_relative_to(boundary):
-                raise ValueError("path outside scan root")
+            # The overlay parser checks its candidate components with lstat
+            # before resolving/reading them, including network and junction paths.
+            if not compose_overlay:
+                resolved = path.resolve(strict=True)
+                if resolved in included:
+                    continue
+                if boundary is not None and not resolved.is_relative_to(boundary):
+                    raise ValueError("path outside scan root")
+            result.files_checked += 1
             data: Any
             if parse is parse_compose:
                 data = parse_compose(path, scan_root=boundary)
@@ -502,38 +538,95 @@ def _run_registry(
                 data = parse_dockerfile(path, scan_root=boundary)
             else:
                 data = parse(path)
+                if isinstance(data, ComposeFile):
+                    compose_checks.validate_compose_shape(data)
             if isinstance(data, NginxConfig):
                 included.update(Path(p) for p in data.comment_offsets)
         except Exception as exc:  # noqa: BLE001 — сообщаем и идём дальше
             description = _describe(exc)
+            reason = "parse_error"
+            if isinstance(exc, ComposeMergeError):
+                description = str(exc)
+                reason = "compose_merge_unresolved"
+            if isinstance(exc, SystemdDropInError):
+                description = str(exc)
+                reason = "systemd_dropin_unresolved"
             if (
                 parse is parse_compose
                 and type(exc) is ValueError
-                and exc.args == (_COMPOSE_V1_ERROR,)
+                and exc.args == (COMPOSE_V1_ERROR,)
             ):
-                description = _COMPOSE_V1_ERROR
+                description = COMPOSE_V1_ERROR
             result.errors.append(
-                ScanError(file=str(path), message=f"не удалось разобрать: {description}")
+                ScanError(
+                    file=str(path),
+                    message=f"не удалось разобрать: {description}",
+                    code=reason,
+                )
             )
+            for rule in rules:
+                if rule.id in registry:
+                    _record(result, path, rule, "unavailable")
             continue
 
         # По одной, а не всем блоком: падение любой проверки уничтожало
         # найденное другими правилами и выглядело как ошибка разбора.
         file_findings: list[Finding] = []
+        if isinstance(data, HBARecords):
+            for source, line, message in dict.fromkeys(data.gaps):
+                result.errors.append(
+                    ScanError(str(source), f"строка {line}: {message}", "hba_include_unresolved")
+                )
         for rule in rules:
             check_fn = registry.get(rule.id)
             if check_fn is None:
                 continue
             try:
-                file_findings.extend(_finding(rule, path, item) for item in check_fn(data))
+                if strict_scope and rule.id == "N004" and isinstance(data, NginxConfig):
+                    check_fn = nginx_checks.check_no_rate_limit_strict
+                observed = tuple(_finding(rule, path, item) for item in check_fn(data))
+                file_findings.extend(observed)
+                checking_coverage = (
+                    strict_scope or result.checks is not None or result.coverage is not None
+                )
+                subjects = (
+                    compose_checks.unresolved_services(data, rule.id)
+                    if checking_coverage and isinstance(data, ComposeFile)
+                    else ()
+                )
+                unresolved = bool(subjects) or (
+                    checking_coverage
+                    and parse is parse_dockerfile
+                    and rule.id == "D004"
+                    and not dockerfile_checks.has_resolved_base_images(data)
+                )
+                if unresolved and strict_scope:
+                    result.errors.append(
+                        ScanError(
+                            file=str(path),
+                            message=f"{rule.id}: значение не определено статически",
+                            code="unresolved_value",
+                            rule_id=rule.id,
+                            subjects=subjects,
+                        )
+                    )
+                has_gap = isinstance(data, HBARecords) and bool(data.gaps)
+                status = "unavailable" if unresolved or has_gap else "fail" if observed else "pass"
+                _record(result, path, rule, status, observed)
             except Exception as exc:  # noqa: BLE001
+                _record(result, path, rule, "unavailable")
                 result.errors.append(
                     ScanError(
                         file=str(path),
                         message=f"сбой проверки {rule.id}: {_describe(exc)}",
+                        code="check_error",
+                        rule_id=rule.id,
                     )
                 )
 
+        if not inline_exceptions:
+            result.findings.extend(file_findings)
+            continue
         suppression_cache: dict[str, dict[int, set[str]]] = {}
         for finding in file_findings:
             origin = Path(finding.file)
@@ -550,7 +643,7 @@ def _run_registry(
                         data.comment_offsets
                         if isinstance(data, EnvFile) and origin == path
                         else data.comment_offsets.get(str(origin.resolve()), {})
-                        if isinstance(data, (NginxConfig, PostgreSQLConfig))
+                        if isinstance(data, (NginxConfig, PostgreSQLConfig, HBARecords))
                         else None
                     )
                     suppression_cache[finding.file] = inline_suppressions(
@@ -591,13 +684,28 @@ def scan(
     uz: int | None = None,
     *,
     production_only: bool = False,
+    record_checks: bool = False,
+    inline_exceptions: bool = True,
+    strict_scope: bool = False,
+    require_input: bool = False,
+    record_coverage: bool = False,
+    compose_files: Sequence[Path] = (),
 ) -> ScanResult:
     """Сканирует root и возвращает находки (по убыванию severity) и ошибки разбора."""
     rules_by_target: dict[str, list[Rule]] = {}
     for rule in filter_by_uz(filter_rules(load_rules(rules_dir), select, ignore), uz):
         rules_by_target.setdefault(rule.target, []).append(rule)
 
-    result = ScanResult()
+    coverage = (
+        {
+            rule.id: {"pass": 0, "fail": 0, "unavailable": 0}
+            for rules in rules_by_target.values()
+            for rule in rules
+        }
+        if record_coverage
+        else None
+    )
+    result = ScanResult(checks=[] if record_checks else None, coverage=coverage)
 
     def _walk_error(error: OSError) -> None:
         target = getattr(error, "filename", None) or str(root)
@@ -605,8 +713,18 @@ def scan(
             ScanError(file=str(target), message=f"не удалось обойти каталог: {_describe(error)}")
         )
 
+    if not root.is_dir() and not root.is_file():
+        result.errors.append(ScanError(str(root), "ожидался обычный файл или каталог"))
+        return result
+    if compose_files and not root.is_dir():
+        result.errors.append(
+            ScanError(
+                str(root), "для списка Compose укажите каталог проекта", "compose_merge_unresolved"
+            )
+        )
+        return result
     files = discover_files(root, exclude, _walk_error, production_only=production_only)
-    if rules_by_target.get("compose") and not root.is_file():
+    if rules_by_target.get("compose") and not root.is_file() and not compose_files:
         compose_names: dict[Path, set[str]] = {}
         for compose_file in files["compose"]:
             compose_names.setdefault(compose_file.parent, set()).add(compose_file.name.lower())
@@ -621,7 +739,9 @@ def scan(
             if names & bases and names & overrides:
                 result.errors.append(
                     ScanError(
-                        file=str(directory), message="объединение Compose файлов не поддерживается"
+                        file=str(directory),
+                        message="объединение Compose файлов не поддерживается",
+                        code="compose_merge_unresolved",
                     )
                 )
     try:
@@ -642,8 +762,18 @@ def scan(
         fragment_inputs[ordered[0]] = ordered
         files["pwquality"] = [p for p in files["pwquality"] if p not in ordered[1:]]
 
+    compose_parser: Callable[[Path], Any] = parse_compose
+    if compose_files:
+        sequence = tuple(path if path.is_absolute() else root / path for path in compose_files)
+        files["compose"] = [sequence[0]]
+
+        def parse_selected_compose(_entry: Path) -> ComposeFile:
+            return parse_compose_files(sequence, boundary)
+
+        compose_parser = parse_selected_compose
+
     registries: list[tuple[str, Mapping[str, CheckFn], Callable[[Path], Any]]] = [
-        ("compose", compose_checks.REGISTRY, parse_compose),
+        ("compose", compose_checks.REGISTRY, compose_parser),
         (
             "postgresql_conf",
             postgres_checks.POSTGRESQL_CONF_REGISTRY,
@@ -651,17 +781,33 @@ def scan(
         ),
         ("pg_hba", postgres_checks.PG_HBA_REGISTRY, parse_pg_hba),
         ("sshd_config", sshd_checks.REGISTRY, lambda p: parse_sshd_config(p, scan_root=boundary)),
-        ("systemd_unit", systemd_checks.REGISTRY, parse_systemd_unit),
+        (
+            "systemd_unit",
+            systemd_checks.REGISTRY,
+            lambda p: parse_systemd_unit(p, scan_root=boundary),
+        ),
         ("dockerfile", dockerfile_checks.REGISTRY, parse_dockerfile),
-        ("dotenv", dotenv_checks.REGISTRY, parse_dotenv),
-        ("login_defs", linux_checks.LOGIN_DEFS_REGISTRY, parse_login_defs),
+        ("dotenv", dotenv_checks.REGISTRY, lambda p: parse_dotenv(p, scan_root=boundary)),
+        (
+            "login_defs",
+            linux_checks.LOGIN_DEFS_REGISTRY,
+            lambda p: parse_login_defs(p, scan_root=boundary),
+        ),
         (
             "pwquality",
             linux_checks.PWQUALITY_REGISTRY,
             lambda p: parse_pwquality(p, scan_root=boundary, fragments=fragment_inputs.get(p)),
         ),
-        ("useradd_defaults", linux_checks.USERADD_REGISTRY, parse_useradd_defaults),
-        ("postfix_main", postfix_checks.REGISTRY, parse_postfix_main),
+        (
+            "useradd_defaults",
+            linux_checks.USERADD_REGISTRY,
+            lambda p: parse_useradd_defaults(p, scan_root=boundary),
+        ),
+        (
+            "postfix_main",
+            postfix_checks.REGISTRY,
+            lambda p: parse_postfix_main(p, scan_root=boundary),
+        ),
         ("nginx", nginx_checks.REGISTRY, lambda p: parse_nginx(p, scan_root=boundary)),
         ("rsyslog", linux_checks.RSYSLOG_REGISTRY, lambda p: parse_rsyslog(p, scan_root=boundary)),
     ]
@@ -672,7 +818,24 @@ def scan(
         # отключённого типа: он всё равно давал ошибку разбора и код 3.
         if not target_rules:
             continue
-        _run_registry(result, files[target], target_rules, registry, parse, boundary)
+        _run_registry(
+            result,
+            files[target],
+            target_rules,
+            registry,
+            parse,
+            boundary,
+            inline_exceptions=inline_exceptions,
+            strict_scope=strict_scope,
+            compose_overlay=target == "compose" and bool(compose_files),
+        )
+
+    if require_input and not result.files_checked and not result.errors:
+        result.errors.append(
+            ScanError(
+                str(root), "нет поддерживаемых файлов для выбранных правил", "no_supported_input"
+            )
+        )
 
     result.findings.sort(key=lambda f: (-int(f.rule.severity), f.file, f.rule.id, f.location))
     result.errors.sort(key=lambda e: e.file)

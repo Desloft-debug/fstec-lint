@@ -189,65 +189,150 @@ def _hba_comment_start(line: str) -> int:
     return len(line)
 
 
-def parse_pg_hba(path: Path, scan_root: Path | None = None) -> list[dict]:
-    """Разбирает pg_hba.conf в список записей {type, database, user, address, method, options}."""
-    records: list[dict] = []
-    text = BoundedReader(scan_root or path.parent).read(path)
-    for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.rstrip("\r\n")
-        # PostgreSQL joins even comments and quoted strings before parsing.
-        # Reject this form until that preprocessing is supported, rather
-        # than misinterpret a commented continuation as a new record.
-        if line.endswith("\\"):
-            raise ValueError("unsupported pg_hba continuation")
-        line = line[: _hba_comment_start(line)]
-        parts = _hba_tokens(line)
-        if not parts:
-            continue
-        if len(parts) < 3:
+class HBARecords(list[dict]):
+    """Ordered declarations, with gaps kept separate from known records."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.comment_offsets: dict[str, dict[int, int]] = {}
+        self.gaps: list[tuple[Path, int, str]] = []
+
+
+def _hba_include_name(token: str) -> Path:
+    if token.startswith('"'):
+        if not re.fullmatch(r'"(?:[^"]|"")*"', token):
+            raise ValueError("invalid HBA include path")
+        token = token[1:-1].replace('""', '"')
+    elif '"' in token:
+        raise ValueError("invalid HBA include path")
+    # Reject drive/UNC forms also on Linux, before a Windows-formatted
+    # input can be interpreted as a local POSIX filename.
+    if (
+        not token
+        or "\x00" in token
+        or (chr(92) in token and (not Path(token).is_absolute() or token.startswith(chr(92))))
+    ):
+        raise ValueError("invalid HBA include path")
+    target = Path(token)
+    if target.as_posix().startswith("//") or target.anchor and not target.is_absolute():
+        raise ValueError("non-local HBA include")
+    return target
+
+
+def _hba_record(parts: list[str], line: str, lineno: int) -> dict:
+    if len(parts) < 3:
+        raise ValueError("invalid pg_hba record")
+
+    conn_type = parts[0]
+    database = parts[1]
+    user = parts[2]
+
+    if conn_type == "local":
+        if len(parts) < 4:
             raise ValueError("invalid pg_hba record")
-
-        conn_type = parts[0]
-        database = parts[1]
-        user = parts[2]
-
-        if conn_type == "local":
-            if len(parts) < 4:
+        address = None
+        method = parts[3] if len(parts) > 3 else ""
+        options = parts[4:]
+    else:
+        if conn_type not in {"host", "hostssl", "hostnossl", "hostgssenc", "hostnogssenc"}:
+            raise ValueError("unsupported pg_hba record")
+        if len(parts) < 5:
+            raise ValueError("invalid pg_hba record")
+        # 'адрес маска' занимает два поля, метод сдвинут вправо.
+        # Иначе методом становилась маска, а 'trust' уезжал в
+        # options, и P001 не срабатывал на входе без пароля.
+        if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
+            if len(parts) < 6:
                 raise ValueError("invalid pg_hba record")
-            address = None
-            method = parts[3] if len(parts) > 3 else ""
-            options = parts[4:]
+            address = f"{parts[3]} {parts[4]}"
+            method = parts[5]
+            options = parts[6:]
         else:
-            if conn_type not in {"host", "hostssl", "hostnossl", "hostgssenc", "hostnogssenc"}:
-                raise ValueError("unsupported pg_hba record")
-            if len(parts) < 5:
-                raise ValueError("invalid pg_hba record")
-            # 'адрес маска' занимает два поля, метод сдвинут вправо.
-            # Иначе методом становилась маска, а 'trust' уезжал в
-            # options, и P001 не срабатывал на входе без пароля.
-            if _NETMASK_RE.match(parts[4]) and "/" not in parts[3]:
-                if len(parts) < 6:
-                    raise ValueError("invalid pg_hba record")
-                address = f"{parts[3]} {parts[4]}"
-                method = parts[5]
-                options = parts[6:]
-            else:
-                address = parts[3]
-                method = parts[4]
-                options = parts[5:]
+            address = parts[3]
+            method = parts[4]
+            options = parts[5:]
 
-        if method not in _HBA_METHODS:
-            raise ValueError("unsupported pg_hba authentication method")
-        records.append(
-            {
-                "type": conn_type,
-                "database": database,
-                "user": user,
-                "address": address,
-                "method": method,
-                "options": options,
-                "raw": line,
-                "line": lineno,
-            }
-        )
+    if method not in _HBA_METHODS:
+        raise ValueError("unsupported pg_hba authentication method")
+    return {
+        "type": conn_type,
+        "database": database,
+        "user": user,
+        "address": address,
+        "method": method,
+        "options": options,
+        "raw": line,
+        "line": lineno,
+    }
+
+
+def parse_pg_hba(path: Path, scan_root: Path | None = None) -> HBARecords:
+    """Read local PostgreSQL 16+ HBA fragment directives in declaration order."""
+    records = HBARecords()
+    reader = BoundedReader(scan_root or path.parent)
+    entry = reader.checked(path)
+
+    def gap(file: Path, number: int, message: str) -> None:
+        if len(records.gaps) < 255:
+            records.gaps.append((file, number, message))
+        elif len(records.gaps) == 255:
+            records.gaps.append((entry, 1, "остальные ошибки включения не показаны"))
+
+    def include(file: Path, number: int, parts: list[str], stack: tuple[Path, ...]) -> None:
+        kind = parts[0]
+        try:
+            if len(parts) != 2:
+                raise ValueError("invalid HBA include directive")
+            target = file.parent / _hba_include_name(parts[1])
+            try:
+                checked = reader.local_include(target)
+            except FileNotFoundError:
+                if kind == "include_if_exists":
+                    return
+                raise
+            if kind == "include_dir":
+                for child in reader.postgresql_include_dir(checked, no_links=True):
+                    try:
+                        read(reader.local_include(child), stack)
+                    except (OSError, ValueError, RuntimeError):
+                        gap(file, number, "файл из include_dir не разобран")
+            else:
+                read(checked, stack)
+        except (OSError, ValueError, RuntimeError):
+            gap(file, number, "включение не разобрано")
+
+    def read(file: Path, stack: tuple[Path, ...]) -> None:
+        text = reader.read(file, stack)
+        offsets: dict[int, int] = {}
+        records.comment_offsets[str(file)] = offsets
+        # Limit aggregate work as well as the successful read count. Failed
+        # optional references and malformed directives still cost lookups.
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            try:
+                if line.endswith(chr(92)):
+                    raise ValueError("unsupported pg_hba continuation")
+                offset = _hba_comment_start(line)
+                if offset < len(line):
+                    offsets[lineno] = offset
+                line = line[:offset]
+                parts = _hba_tokens(line)
+                if not parts:
+                    continue
+                if parts[0] in {"include", "include_if_exists", "include_dir"}:
+                    reader.work += 1
+                    if reader.work > 16384:
+                        raise ValueError("HBA include expansion limit exceeded")
+                    include(file, lineno, parts, (*stack, file))
+                else:
+                    source = lineno if file == entry else SourceLine(lineno, str(file))
+                    records.append(_hba_record(parts, line, source))
+            except ValueError:
+                if not stack:
+                    raise
+                gap(file, lineno, "запись во включённом файле не разобрана")
+                # A continued physical line makes subsequent record boundaries unknown.
+                if line.endswith(chr(92)) or reader.work > 16384:
+                    return
+
+    read(entry, ())
     return records

@@ -175,7 +175,7 @@ def test_explicit_root_user_flagged():
     compose = {"services": {"web": {"user": "root"}}}
     findings = cc.check_root_user(compose)
     assert len(findings) == 1
-    assert "явно запущен от root" in findings[0][1]
+    assert "явно указан root/uid 0" in findings[0][1]
 
 
 def test_explicit_uid_zero_flagged():

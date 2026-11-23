@@ -39,6 +39,7 @@ class ReportData:
     errors: tuple[tuple[str, str], ...] = ()
     suppressed: int = 0
     has_context: bool = False
+    files_checked: int = 0
 
     def notes(self) -> list[str]:
         lines = []
@@ -64,4 +65,5 @@ def report_data(value: list[Finding] | ScanResult) -> ReportData:
         tuple((relative_file(error.file), ERROR_MESSAGE) for error in value.errors),
         value.suppressed,
         True,
+        value.files_checked,
     )

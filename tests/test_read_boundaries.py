@@ -1,66 +1,34 @@
-"""Opened-object containment applies to every selected configuration format.
-
-The explicit user contract forbids external-byte consumption. Substituting the
-opened handle deterministically exercises the window after pathname validation;
-safe refusal is allowed, reading first and reporting an error later is not.
-"""
-
-from pathlib import Path
+"""Scanners fail closed when opened-file validation does not succeed."""
 
 import pytest
 
 from fstec_lint.engine import scan
+from fstec_lint.parsers import base
 
 
 @pytest.mark.parametrize(
     "filename,body,rule",
     [
-        ("compose.yaml", "services: {app: {privileged: true}}\n", "C002"),
-        ("Dockerfile", "FROM alpine:3.20\nUSER root\n", "D001"),
-        ("pg_hba.conf", "host all all 0.0.0.0/0 trust\n", "P001"),
+        ("compose.yaml", "services: {app: {image: alpine:3.20}}\n", "C002"),
+        ("Dockerfile", "FROM alpine:3.20\nUSER 1000\n", "D001"),
+        ("pg_hba.conf", "host all all 127.0.0.1/32 scram-sha-256\n", "P001"),
     ],
 )
-def test_scan_rejects_external_opened_object_before_read(
-    tmp_path, monkeypatch, filename, body, rule
-):
-    selected = tmp_path / "selected"
-    selected.mkdir()
-    target = selected / filename
+def test_scan_requires_opened_file_validation(tmp_path, monkeypatch, filename, body, rule):
+    target = tmp_path / filename
     target.write_text(body, encoding="utf-8")
-    outside = tmp_path / "outside.conf"
-    outside.write_text(body, encoding="utf-8")
-    real_open = Path.open
     attempts = []
-    external_reads = []
+    original = base._opened_path
 
-    class ObservedFile:
-        def __init__(self, source):
-            self.source = source
+    def unavailable(fd):
+        path = original(fd)
+        if path == target.resolve():
+            attempts.append(fd)
+            raise ValueError("opened file validation unavailable")
+        return path
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return self.source.__exit__(*args)
-
-        def __getattr__(self, name):
-            return getattr(self.source, name)
-
-        def read(self, *args):
-            result = self.source.read(*args)
-            external_reads.append(len(result))
-            return result
-
-    def substitute(path, *args, **kwargs):
-        if path == target and not attempts:
-            attempts.append(True)
-            return ObservedFile(real_open(outside, *args, **kwargs))
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", substitute)
-    try:
-        scan(target, select=[rule])
-    except (ValueError, OSError):
-        pass
-    assert attempts, "The selected format was not exercised"
-    assert not external_reads, "The parser consumed bytes from an opened object outside the root"
+    monkeypatch.setattr(base, "_opened_path", unavailable)
+    result = scan(target, select=[rule])
+    assert attempts
+    assert result.errors
+    assert not result.findings

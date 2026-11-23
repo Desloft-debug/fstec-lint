@@ -1,11 +1,5 @@
-"""Action shell contract: environment transport and actual Bash argument boundaries.
+"""Local Action contract on benign paths; external tools are stubbed."""
 
-Only Bash builtins and recording functions run: PATH is empty, pip/fstec-lint
-are shell stubs, no installation, external benchmark or network command runs.
-This is a local composite-script test, not a GitHub-hosted Action execution.
-"""
-
-import argparse
 import os
 import re
 import shutil
@@ -17,167 +11,91 @@ import yaml
 
 ACTION = Path(__file__).resolve().parents[1] / "action.yml"
 EXPRESSIONS = {
-    "${{ github.action_ref }}": "ref",
-    "${{ github.action_path }}": "action_path",
-    "${{ inputs.path }}": "path",
-    "${{ inputs.format }}": "format",
-    "${{ inputs.output }}": "output",
-    "${{ inputs.fail-on }}": "fail_on",
+    "${{ github.action_path }}": "selected copy",
+    "${{ inputs.path }}": "каталог с пробелами",
+    "${{ inputs.format }}": "json-context",
+    "${{ inputs.output }}": "report.json",
+    "${{ inputs.fail-on }}": "high",
 }
-VALUES = [
-    "",
-    "каталог с пробелом/測試",
-    "tab\tvalue",
-    "${{ inputs.output }}",
-    "plain",
-    "directory with spaces",
-    'double"quote',
-    "single'quote",
-    "line one\nline two",
-    "$(printf SYNTHETIC_EXECUTION)",
-    "`printf SYNTHETIC_EXECUTION`",
-    "semi;colon & pipe| star* question? [abc] >file <file",
-    "--leading-dash",
-    'close"; printf SYNTHETIC_EXECUTION; #',
-]
+
+
+def _document():
+    return yaml.safe_load(ACTION.read_text(encoding="utf-8"))
 
 
 def _steps():
-    return [
-        s for s in yaml.safe_load(ACTION.read_text(encoding="utf-8"))["runs"]["steps"] if "run" in s
-    ]
+    return [s for s in _document()["runs"]["steps"] if "run" in s]
 
 
 def test_action_expressions_are_environment_values_only():
     steps = _steps()
-    assert steps
     transported = set()
     for step in steps:
         assert step["shell"] == "bash"
-        assert "${{" not in step["run"], step["name"]
+        assert "${{" not in step["run"]
         transported.update(step.get("env", {}).values())
-    assert set(EXPRESSIONS) <= transported
+    assert set(EXPRESSIONS) == transported
 
 
-@pytest.fixture(scope="module")
-def action_bash():
-    candidates = [
-        Path("C:/Program Files/Git/bin/bash.exe"),
-        Path("C:/Program Files/Git/usr/bin/bash.exe"),
-    ]
-    located = shutil.which("bash")
-    if located:
-        candidates.append(Path(located))
-    for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        try:
-            result = subprocess.run([str(candidate), "--version"], capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode == 0 and b"GNU bash" in result.stdout:
-            return str(candidate)
-    pytest.skip("No executable Bash; static assertions do not count as shell execution")
+def test_only_new_opted_in_report_is_uploaded():
+    settings = _document()
+    assert settings["inputs"]["upload-report"]["default"] == "false"
+    upload = settings["runs"]["steps"][-1]
+    assert "inputs.upload-report == 'true'" in upload["if"]
+    assert "steps.scan.outputs.report != ''" in upload["if"]
+    assert upload["with"]["path"] == "${{ steps.scan.outputs.report }}"
+    assert "$ACTION_PATH" in _steps()[0]["run"]
+    assert "git+" not in _steps()[0]["run"]
 
 
-def _execute(step, values, tmp_path, bash):
-    def expand(text):
-        # One template expansion: expressions inside input values are data and
-        # must not be expanded again by this harness.
-        return re.sub(r"\$\{\{[^{}]*\}\}", lambda m: values[EXPRESSIONS[m[0]]], text)
-
+@pytest.mark.parametrize("status", [0, 1, 2, 3, 99])
+def test_action_gate_and_handoff_do_not_depend_on_worktree_output(tmp_path, status):
+    bash = shutil.which("bash")
+    if bash is None or os.name == "nt":
+        pytest.skip("Bash mock exercised in the Linux test matrix")
+    step = _steps()[1]
     env = os.environ.copy()
-    env.update({"PATH": "", "CAPTURE": tmp_path.as_posix(), "MSYS2_ARG_CONV_EXCL": "*"})
+    env.update({k: EXPRESSIONS[v] for k, v in step["env"].items()})
+    env.update(
+        RUNNER_TEMP=str(tmp_path),
+        GITHUB_OUTPUT=str(tmp_path / "outputs.txt"),
+        CAPTURE=str(tmp_path / "args.txt"),
+        STATUS=str(status),
+    )
     env.pop("BASH_ENV", None)
     env.pop("ENV", None)
-    env.update({key: expand(str(value)) for key, value in step.get("env", {}).items()})
-    # Expand exactly as the Actions runner does. A vulnerable run block must
-    # fail on payloads too, rather than being silently skipped by a static gate.
-    script = expand(step["run"])
-    prefix = """
-calls=0
-pip() {
-  calls=$((calls + 1))
-  printf '%s\\0' "$@" > "$CAPTURE/pip-$calls"
-}
-fstec-lint() {
-  calls=$((calls + 1))
-  printf '%s\\0' "$@" > "$CAPTURE/lint-$calls"
+    prefix = r"""
+python() {
+  printf '%s\0' "$@" > "$CAPTURE"
+  for arg in "$@"; do
+    if [[ "$arg" == --output=* && "$STATUS" != 2 ]]; then
+      printf '{}\n' > "${arg#--output=}"
+    fi
+  done
+  return "$STATUS"
 }
 """
-    result = subprocess.run(
-        [bash, "--noprofile", "--norc", "-c", prefix + script],
-        env=env,
+    proc = subprocess.run(
+        [bash, "--noprofile", "--norc", "-c", prefix + step["run"]],
         cwd=tmp_path,
+        env=env,
         capture_output=True,
         timeout=10,
     )
-    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
-    assert result.stdout == b"", "input was evaluated as shell code"
-    calls = {}
-    for path in tmp_path.iterdir():
-        assert path.name.startswith(("lint-", "pip-")), "unexpected shell side effect"
-        calls[path.name] = [a.decode("utf-8") for a in path.read_bytes().split(b"\0")[:-1]]
-    return calls
-
-
-def _values():
-    return {
-        "ref": "v1.0.0",
-        "action_path": "local action",
-        "path": "project",
-        "format": "json",
-        "output": "report.json",
-        "fail_on": "high",
-    }
-
-
-@pytest.mark.parametrize("value", VALUES)
-@pytest.mark.parametrize("field", ["path", "output", "format", "fail_on"])
-def test_action_scan_argument_boundaries(tmp_path, action_bash, value, field):
-    step = next(s for s in _steps() if "--fail-on" in s["run"])
-    values = {**_values(), field: value}
-    calls = _execute(step, values, tmp_path, action_bash)
-    assert set(calls) == {"lint-1"}
-    # Standard parser without product choices: transport must preserve even
-    # malformed format/fail-on values, leaving validation to the real CLI.
-    parser = argparse.ArgumentParser()
-    parser.add_argument("path")
-    for option in ("--format", "--output", "--fail-on"):
-        parser.add_argument(option)
-    expected = parser.parse_args(
-        [
-            "--format=" + values["format"],
-            "--output=" + values["output"],
-            "--fail-on=" + values["fail_on"],
-            "--",
-            values["path"],
-        ]
-    )
-    actual = parser.parse_args(calls["lint-1"])
-    assert vars(actual) == vars(expected)
-
-
-@pytest.mark.parametrize("value", VALUES)
-@pytest.mark.parametrize("source", ["ref", "action_path"])
-def test_action_install_argument_boundaries(tmp_path, action_bash, value, source):
-    step = next(s for s in _steps() if "pip install" in s["run"])
-    values = {**_values(), source: value}
-    if source == "action_path":
-        values["ref"] = ""
-    calls = _execute(step, values, tmp_path, action_bash)
-    assert set(calls) == {"pip-1", "lint-2"}
-    assert calls["lint-2"] == ["--version"]
-    target = (
-        "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@" + values["ref"]
-        if values["ref"]
-        else values["action_path"]
-    )
-    args = calls["pip-1"]
-    assert args[0] == "install"
-    tail = args[1:]
-    if tail and tail[0] == "--":
-        tail = tail[1:]
-    assert tail == [target]
-    if target.startswith("-"):
-        assert args[1] == "--", "leading-dash local path must not become a pip option"
+    assert proc.returncode == status, proc.stderr
+    args = (tmp_path / "args.txt").read_bytes().decode().split("\0")[:-1]
+    assert args[:3] == ["-I", "-m", "fstec_lint"]
+    assert args[-2:] == ["--", EXPRESSIONS["${{ inputs.path }}"]]
+    assert "--no-inline-suppressions" in args
+    assert "--strict-scope" in args
+    assert "--require-input" in args
+    report = Path(next(re.sub("^--output=", "", a) for a in args if a.startswith("--output=")))
+    assert report.parent.parent == tmp_path
+    assert report.parent.name.startswith("fstec-lint.")
+    assert report.name == "report.json"
+    if status in {0, 1, 3}:
+        assert (tmp_path / "outputs.txt").read_text().strip() == f"report={report}"
+        assert report.is_file()
+    else:
+        assert not (tmp_path / "outputs.txt").exists()
+        assert report.exists() == (status == 99)

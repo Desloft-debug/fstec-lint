@@ -9,6 +9,7 @@ from urllib.parse import quote
 from .. import __version__
 from ..models import Finding, Severity
 from ._common import report_data
+from ._regulatory import reference_context
 
 if TYPE_CHECKING:
     from ..engine import ScanResult
@@ -37,6 +38,7 @@ def _uri(file: str) -> str:
 
 
 def render(findings: list[Finding] | ScanResult) -> str:
+    supplied_class = None if isinstance(findings, list) else findings.declared_gis_class
     data = report_data(findings)
     findings = data.findings
     rules: dict[str, dict] = {}
@@ -54,7 +56,10 @@ def render(findings: list[Finding] | ScanResult) -> str:
                 "fullDescription": {"text": rule.description},
                 "help": {"text": rule.remediation},
                 "defaultConfiguration": {"level": LEVEL[rule.severity]},
-                "properties": {"tags": ["security", "fstec", rule.measure]},
+                "properties": {
+                    "tags": ["security", "fstec", rule.measure],
+                    "regulatory": reference_context(rule, supplied_class),
+                },
             }
         results.append(
             {
@@ -78,6 +83,10 @@ def render(findings: list[Finding] | ScanResult) -> str:
                 # Отпечаток не зависит от номера строки, поэтому GitHub Code
                 # Scanning не заводит новый алерт после сдвига файла.
                 "partialFingerprints": {"fstecLintFingerprint/v1": _fingerprint(finding)},
+                "properties": {
+                    "observation": "observed",
+                    "compliance_assessed": False,
+                },
             }
         )
 
@@ -100,6 +109,8 @@ def render(findings: list[Finding] | ScanResult) -> str:
     }
     run = sarif["runs"][0]
     run["properties"] = {"limitations": data.notes()[-1]}
+    if supplied_class is not None:
+        run["properties"]["declared_gis_class"] = supplied_class
     if data.has_context:
         run["properties"]["inlineSuppressed"] = data.suppressed
         run["invocations"] = [

@@ -52,7 +52,7 @@ def _case(tmp_path, case, marker=MARKER):
         "# synthetic only\n" + f"host all all 0.0.0.0/0 {method} ldapbindpasswd={marker}\n",
         encoding="utf-8",
     )
-    return path, "P002" if method == "ldap" else "P001", 2
+    return path, {"ldap": "P002", "trust": "P001", "md5": "P009"}[method], 2
 
 
 def _findings(path, rule_id, line):
@@ -65,8 +65,8 @@ def _findings(path, rule_id, line):
     if rule_id == "C004":
         assert "PASSWORD" in finding.detail
         assert finding.location == "service:app"
-    elif rule_id == "P001":
-        assert "trust" in finding.detail or "md5" in finding.detail
+    elif rule_id in {"P001", "P009"}:
+        assert ("trust" if rule_id == "P001" else "md5") in finding.detail
     else:
         assert "0.0.0.0/0" in finding.detail
     return result.findings
@@ -109,11 +109,7 @@ def test_check_api_is_safe_before_finding(tmp_path, case):
     if rule_id == "C004":
         results = compose_checks.check_secrets_in_environment(parse_compose(path))
     else:
-        check = (
-            postgres_checks.check_trust_or_md5_auth
-            if rule_id == "P001"
-            else postgres_checks.check_open_hba_address
-        )
+        check = postgres_checks.PG_HBA_REGISTRY[rule_id]
         results = check(parse_pg_hba(path))
     assert len(results) == 1 and results[0][2] == line
     assert results[0][0] and results[0][1]

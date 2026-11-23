@@ -61,7 +61,8 @@ def check_permit_empty_passwords(settings: dict) -> CheckResults:
             findings.append(
                 (
                     f"sshd_config: PermitEmptyPasswords{scope}",
-                    "PermitEmptyPasswords yes — вход с пустым паролем разрешён",
+                    "PermitEmptyPasswords yes допускает пустой пароль при доступной "
+                    "парольной аутентификации; учётные записи не проверены",
                     line,
                 )
             )
@@ -119,17 +120,27 @@ def check_no_multifactor(settings: dict) -> CheckResults:
     findings = []
     for scope, raw, line in _values(settings, "authenticationmethods", "any"):
         lists = raw.split()
-        # Каждый список через пробел — отдельный допустимый путь входа.
-        # Список из одного метода означает вход с одним фактором.
-        single = [item for item in lists if len(item.split(",")) < 2]
-        if raw.strip().lower() == "any" or single:
+        # Each space-separated list is an alternative path. Requiring two
+        # keys (publickey,publickey) is distinct credential use, not evidence
+        # of two kinds of factor; device qualifiers do not change the method.
+        alternatives = [item.split(",") for item in lists]
+        any_method = raw.strip().lower() == "any"
+        if any_method:
+            detail = "AuthenticationMethods any допускает один метод; факторы и PAM не проверены"
+        elif any(len(methods) < 2 for methods in alternatives):
             detail = (
-                "AuthenticationMethods any допускает один метод; факторы и PAM не проверены"
-                if raw.strip().lower() == "any"
-                else "AuthenticationMethods допускает путь с одним методом; "
-                "факторы и PAM не проверены"
+                "AuthenticationMethods допускает путь с одним методом; факторы и PAM не проверены"
             )
-            findings.append((f"sshd_config: AuthenticationMethods{scope}", detail, line))
+        elif any(
+            len({method.partition(":")[0] for method in methods}) == 1 for methods in alternatives
+        ):
+            detail = (
+                "AuthenticationMethods допускает путь с повтором одного метода; "
+                "независимость факторов статически не подтверждена"
+            )
+        else:
+            continue
+        findings.append((f"sshd_config: AuthenticationMethods{scope}", detail, line))
     return findings
 
 

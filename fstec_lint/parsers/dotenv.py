@@ -68,8 +68,8 @@ def _quoted_value(lines: list[str], index: int, raw: str) -> tuple[str, int, str
         pos = 0
 
 
-def parse_dotenv(path: Path) -> EnvFile:
-    lines = BoundedReader(path.parent).read(path).removeprefix("\ufeff").splitlines()
+def parse_dotenv(path: Path, scan_root: Path | None = None) -> EnvFile:
+    lines = BoundedReader(scan_root or path.parent).read(path).removeprefix("\ufeff").splitlines()
     entries: list[EnvEntry] = []
     comments: list[tuple[int, str]] = []
     offsets: dict[int, int] = {}

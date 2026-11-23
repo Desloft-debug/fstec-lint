@@ -1,49 +1,16 @@
-from pathlib import Path
-
 import pytest
 
-from fstec_lint.engine import scan
-from fstec_lint.parsers.base import BoundedReader
+from fstec_lint.parsers import base
 
 
-@pytest.mark.parametrize("surface", ["reader", "main"])
-def test_opened_file_substitution_rejected_before_read(tmp_path, monkeypatch, surface):
-    selected = tmp_path / "selected"
-    selected.mkdir()
-    target = selected / "postgresql.conf"
-    target.write_text("ssl=off\n", encoding="utf-8")
-    outside = tmp_path / "outside.conf"
-    outside.write_text("ssl=on\n", encoding="utf-8")
-    original_open = Path.open
-    read_calls = []
+def test_opened_file_validation_precedes_stream_creation(tmp_path, monkeypatch):
+    target = tmp_path / "fixture.conf"
+    target.write_text("ssl=on\n", encoding="utf-8")
 
-    class Observed:
-        def __init__(self, file):
-            self.file = file
+    def unexpected_stream(*args, **kwargs):
+        pytest.fail("buffered stream created before validating the descriptor")
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return self.file.__exit__(*args)
-
-        def __getattr__(self, name):
-            return getattr(self.file, name)
-
-        def read(self, *args):
-            read_calls.append(True)
-            return self.file.read(*args)
-
-    def substituted(path, *args, **kwargs):
-        if path != target:
-            return original_open(path, *args, **kwargs)
-        return Observed(original_open(outside, *args, **kwargs))
-
-    monkeypatch.setattr(Path, "open", substituted)
-    if surface == "reader":
-        with pytest.raises(ValueError):
-            BoundedReader(selected).read(target)
-    else:
-        result = scan(target, select=["P005"])
-        assert result.errors
-    assert not read_calls
+    monkeypatch.setattr(base, "_opened_path", lambda fd: tmp_path.parent / "not-opened.conf")
+    monkeypatch.setattr(base.os, "fdopen", unexpected_stream)
+    with pytest.raises(ValueError, match="opened file outside"):
+        base.BoundedReader(tmp_path).read(target)

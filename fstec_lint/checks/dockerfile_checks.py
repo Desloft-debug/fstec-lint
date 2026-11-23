@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import shlex
 from collections import defaultdict
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -223,8 +225,8 @@ def check_missing_user(instructions: list[dict]) -> CheckResults:
         return [
             (
                 _loc(final, "USER"),
-                "в финальном стейдже сборки нет инструкции USER — образ по "
-                "умолчанию запускается от root",
+                "USER не задан в финальном стейдже или его локальных предках; "
+                "пользователь внешнего базового образа не проверен",
                 final.from_line,
             )
         ]
@@ -232,11 +234,30 @@ def check_missing_user(instructions: list[dict]) -> CheckResults:
         return [
             (
                 _loc(final, "USER"),
-                f"USER {user} — образ явно запускается от root",
+                "в Dockerfile явно указан root/uid 0; состояние контейнера не проверено",
                 final.from_line,
             )
         ]
     return []
+
+
+def _add_remote_without_checksum(args: str) -> bool:
+    has_checksum = False
+    while args.startswith("--"):
+        option, *rest = args.split(None, 1)
+        args = rest[0] if rest else ""
+        if re.fullmatch(r"--checksum=sha256:[0-9a-fA-F]{64}", option):
+            has_checksum = True
+    if has_checksum:
+        return False
+    try:
+        paths = json.loads(args) if args.startswith("[") else shlex.split(args)
+    except ValueError:
+        return False
+    return isinstance(paths, list) and any(
+        isinstance(source, str) and source.startswith(("http://", "https://"))
+        for source in paths[:-1]
+    )
 
 
 def check_add_remote_url(instructions: list[dict]) -> CheckResults:
@@ -248,8 +269,7 @@ def check_add_remote_url(instructions: list[dict]) -> CheckResults:
                 continue
             digest = _private_location(inst["args"])
             occurrences[digest] += 1
-            first_arg = inst["args"].split()[0] if inst["args"].split() else ""
-            if first_arg.startswith(("http://", "https://")):
+            if _add_remote_without_checksum(inst["args"]):
                 findings.append(
                     (
                         _loc(stage, f"ADD sha256:{digest}:{occurrences[digest]}"),
@@ -271,11 +291,17 @@ def check_secret_build_arg(instructions: list[dict]) -> CheckResults:
                 findings.append(
                     (
                         _loc(stage, f"ARG {name}"),
-                        f"ARG {name} — значение попадает в историю слоёв образа (docker history)",
+                        f"ARG {name} похож на параметр для секрета; его значение может оказаться "
+                        "в метаданных, истории или provenance сборки",
                         inst["line"],
                     )
                 )
     return findings
+
+
+def has_resolved_base_images(instructions: list[dict]) -> bool:
+    images = [stage.parent for stage in _build_stages(_stages(instructions))]
+    return bool(images) and all(image and "$" not in image for image in images)
 
 
 def check_latest_base_image(instructions: list[dict]) -> CheckResults:

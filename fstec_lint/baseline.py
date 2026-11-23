@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from .models import Finding
+from .parsers.base import read_regular_bytes
 
 # 3: адрес D002/D005 при усечении получил хвост-хеш полного текста
 # команды — две длинные команды с общим началом делили один адрес.
@@ -80,7 +81,11 @@ def _legacy_matches(findings: list[Finding], scan_root: Path) -> dict[str, list[
                             f"{stage.label}: {inst['instruction']} {_short(inst['args'])}"
                         )
         else:
+            from .parsers.base import SourceLine
+
             for record, location in _hba_locations(parse_pg_hba(source, scan_root=scan_root)):
+                if isinstance(record["line"], SourceLine):
+                    continue
                 old_locations[record["line"]] = "pg_hba: " + record["raw"].strip()
                 for rule_id in ("P001", "P002"):
                     current_locations[rule_id, record["line"]] = location
@@ -98,8 +103,7 @@ def load(
 ) -> set[str]:
     """Читает baseline и возвращает набор отпечатков находок."""
     try:
-        with path.open("rb") as source:
-            data = source.read(MAX_BYTES + 1)
+        data = read_regular_bytes(path, MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
             raise BaselineError("baseline: превышен предел размера")
         text = data.decode("utf-8")

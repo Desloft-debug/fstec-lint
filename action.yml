@@ -11,17 +11,27 @@ inputs:
     required: false
     default: "."
   format:
-    description: "Формат отчёта: text | json | html | sarif"
+    description: "Формат отчёта: text | json | json-context | html | sarif"
     required: false
     default: "text"
   output:
-    description: "Путь для сохранения отчёта (расширение задавайте под format)"
+    description: "Имя файла отчёта без пути (расширение задавайте под format)"
     required: false
     default: "fstec-lint-report.txt"
   fail-on:
     description: "Минимальная severity, при которой джоба падает: critical | high | medium | low | none"
     required: false
     default: "high"
+
+  upload-report:
+    description: "Сохранить отчёт как артефакт GitHub Actions (может содержать данные проекта)"
+    required: false
+    default: "false"
+
+outputs:
+  report:
+    description: "Путь к новому отчёту во временном каталоге runner"
+    value: ${{ steps.scan.outputs.report }}
 
 runs:
   using: "composite"
@@ -34,26 +44,16 @@ runs:
     - name: Install fstec-lint
       shell: bash
       env:
-        ACTION_REF: ${{ github.action_ref }}
         ACTION_PATH: ${{ github.action_path }}
-      # Ставим ту же ревизию, с которой вызван сам Action: без этого
-      # 'uses: ...@v1.0.0' закрепляет обёртку, а инструмент всё равно
-      # приезжал бы с HEAD и прогон перестал бы быть воспроизводимым.
-      #
-      # Пустой action_ref означает вызов из локального пути (./), где
-      # ревизии нет — тогда ставим из самого чекаута, а не из 'main':
-      # подменять без предупреждения версию инструмента нельзя.
+      # The Action checkout is already resolved by the runner. Do not fetch a
+      # mutable ref a second time. The caller must trust the selected Action.
       run: |
         set -eu
-        ref="$ACTION_REF"
-        if [ -n "$ref" ]; then
-          pip install "fstec-lint @ git+https://github.com/Desloft-debug/fstec-lint.git@${ref}"
-        else
-          pip install -- "$ACTION_PATH"
-        fi
-        fstec-lint --version
+        python -m pip install -c "$ACTION_PATH/constraints.txt" -- "$ACTION_PATH"
+        python -I -m fstec_lint --version
 
     - name: Run fstec-lint
+      id: scan
       shell: bash
       env:
         SCAN_PATH: ${{ inputs.path }}
@@ -61,13 +61,27 @@ runs:
         REPORT_OUTPUT: ${{ inputs.output }}
         FAIL_ON: ${{ inputs.fail-on }}
       run: |
-        fstec-lint --format="$REPORT_FORMAT" \
-          --output="$REPORT_OUTPUT" \
-          --fail-on="$FAIL_ON" -- "$SCAN_PATH"
+        set -eu
+        if [[ ! "$REPORT_OUTPUT" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$ ]]; then
+          echo "output must be a file name, without a directory"
+          exit 2
+        fi
+        umask 077
+        private_dir="$(mktemp -d "${RUNNER_TEMP:?}/fstec-lint.XXXXXXXX")"
+        report="$private_dir/$REPORT_OUTPUT"
+        status=0
+        python -I -m fstec_lint --format="$REPORT_FORMAT" \
+          --output="$report" --fail-on="$FAIL_ON" \
+          --no-inline-suppressions --strict-scope --require-input -- "$SCAN_PATH" || status=$?
+        if [[ "$status" =~ ^[013]$ && -f "$report" && ! -L "$report" ]]; then
+          printf 'report=%s\n' "$report" >> "$GITHUB_OUTPUT"
+        fi
+        exit "$status"
 
     - name: Upload report
-      if: always()
+      if: ${{ !cancelled() && inputs.upload-report == 'true' && steps.scan.outputs.report != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: fstec-lint-report
-        path: ${{ inputs.output }}
+        path: ${{ steps.scan.outputs.report }}
+        if-no-files-found: error

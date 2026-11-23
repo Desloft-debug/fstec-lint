@@ -7,7 +7,7 @@ from pathlib import Path
 from .base import BoundedReader, ConfigMap
 
 
-def parse_postfix_main(path: Path) -> ConfigMap:
+def parse_postfix_main(path: Path, scan_root: Path | None = None) -> ConfigMap:
     """main.cf: «параметр = значение».
 
     Строка, начинающаяся с пробела, продолжает предыдущее значение.
@@ -16,7 +16,8 @@ def parse_postfix_main(path: Path) -> ConfigMap:
     """
     config = ConfigMap()
     key: str | None = None
-    for lineno, raw in enumerate(BoundedReader(path.parent).read(path).splitlines(), start=1):
+    text = BoundedReader(scan_root or path.parent).read(path)
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
         if raw[0] in " \t" and key is not None:

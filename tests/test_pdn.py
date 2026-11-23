@@ -12,8 +12,13 @@ from fstec_lint.cli import main
 from fstec_lint.engine import filter_by_uz, load_rules
 
 
-def test_every_rule_cites_an_existing_measure_of_order_21():
-    for rule in load_rules():
+def test_listed_order_21_mappings_match_the_source():
+    rules = load_rules()
+    assert {rule.id for rule in rules if not rule.pdn_measure} == {"C018", "C019", "C020"}
+    for rule in rules:
+        if not rule.pdn_measure:
+            assert not rule.pdn_measure_title
+            continue
         assert rule.pdn_measure in pdn.MEASURES, (
             f"{rule.id}: меры '{rule.pdn_measure}' нет в приказе N 21"
         )
@@ -24,6 +29,8 @@ def test_every_rule_cites_an_existing_measure_of_order_21():
 
 def test_measure_group_is_one_of_the_fifteen():
     for rule in load_rules():
+        if not rule.pdn_measure:
+            continue
         group = pdn.MEASURES[rule.pdn_measure].group
         assert group in pdn.GROUPS, f"{rule.id}: группы '{group}' нет в пункте 8 приказа"
 
