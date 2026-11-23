@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from .. import vulnclass
 from ..models import Finding, Severity
+from ..output import visible
 from ._common import report_data
 
 if TYPE_CHECKING:
@@ -125,7 +126,10 @@ def render(findings: list[Finding] | ScanResult, today: date | None = None) -> s
     today = today or date.today()
     if not findings:
         return "\n".join(
-            ["fstec-lint: находок не найдено, паспорта уязвимостей не составлялись.", *data.notes()]
+            [
+                "fstec-lint: находок не найдено, паспорта уязвимостей не составлялись.",
+                *map(visible, data.notes()),
+            ]
         )
 
     lines = [
@@ -140,4 +144,4 @@ def render(findings: list[Finding] | ScanResult, today: date | None = None) -> s
     for index, finding in enumerate(findings, start=1):
         lines += _passport(finding, index, today)
         lines += ["-" * 78, ""]
-    return "\n".join(lines).rstrip() + "\n"
+    return "\n".join(map(visible, lines)).rstrip() + "\n"

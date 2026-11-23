@@ -19,3 +19,8 @@ coverage.xml
 fstec-lint-1.1.0/
 
 .pytest-tmp/
+
+# Локальная история и файлы демонстрации
+/demo-history/
+/checks.sqlite3
+/checks.sqlite3-*

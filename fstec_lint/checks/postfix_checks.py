@@ -13,7 +13,7 @@ def check_no_mail_filter(settings: dict) -> CheckResults:
     return [
         (
             "main.cf: content_filter",
-            "не задан ни content_filter, ни smtpd_milters: входящие письма "
+            "не задан ни content_filter, ни smtpd_milters; "
             "внешние способы фильтрации этим анализом не проверяются",
             config_line(settings, "content_filter") or config_line(settings, "smtpd_milters"),
         )

@@ -20,17 +20,15 @@ def _is_true(service: dict, key: str) -> bool:
 
 def check_runs_as_root(unit: dict) -> CheckResults:
     service = _service(unit)
-    # DynamicUser=yes — systemd сам выделяет сервису временный
-    # непривилегированный uid, и статический User при этом не нужен:
-    # такой юнит от root не работает.
-    if _is_true(service, "DynamicUser"):
-        return []
     user = service.get("User")
     if user is None or not str(user).strip():
+        if _is_true(service, "DynamicUser"):
+            return []
         return [
             (
                 "[Service]: User",
-                "User не задан — юнит выполняется от root",
+                "User не задан; у системного сервиса по умолчанию root, "
+                "эффективный контекст запуска не проверен",
                 config_line(service, "User"),
             )
         ]
@@ -79,15 +77,19 @@ def check_protect_system(unit: dict) -> CheckResults:
 
 def check_private_tmp(unit: dict) -> CheckResults:
     service = _service(unit)
-    if not _is_true(service, "PrivateTmp"):
-        return [
-            (
-                "[Service]: PrivateTmp",
-                "PrivateTmp не установлен в true — сервис делит /tmp с другими процессами",
-                config_line(service, "PrivateTmp"),
-            )
-        ]
-    return []
+    value = str(service.get("PrivateTmp", "")).strip().lower()
+    if value in TRUE_VALUES or value == "disconnected":
+        return []
+    if not value and _is_true(service, "DynamicUser"):
+        return []
+    return [
+        (
+            "[Service]: PrivateTmp",
+            "в юните не подтверждена собственная область временных файлов; "
+            "эффективные настройки не проверены",
+            config_line(service, "PrivateTmp"),
+        )
+    ]
 
 
 def check_protect_home(unit: dict) -> CheckResults:

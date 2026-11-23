@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..models import Finding, Severity
+from ..output import visible
 from ._common import report_data
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ def render(findings: list[Finding] | ScanResult) -> str:
     data = report_data(findings)
     findings = data.findings
     if not findings:
-        return "\n".join(["fstec-lint: нарушений не найдено.", *data.notes()])
+        return "\n".join(["fstec-lint: нарушений не найдено.", *map(visible, data.notes())])
 
     lines: list[str] = []
     counts = {s: 0 for s in Severity}
@@ -56,4 +57,4 @@ def render(findings: list[Finding] | ScanResult) -> str:
         if counts[severity]
     )
     lines.append(f"Итого находок: {len(findings)} ({summary})")
-    return "\n".join([*lines, "", *data.notes()])
+    return "\n".join(map(visible, [*lines, "", *data.notes()]))

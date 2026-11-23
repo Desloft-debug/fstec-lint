@@ -188,7 +188,12 @@ def test_successful_command_kills_background_child(ssh, monkeypatch):
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             stat = Path(f"/proc/{pid}/stat")
-            if not stat.exists() or stat.read_text().split(") ", 1)[1].startswith("Z"):
+            try:
+                process_state = stat.read_text().split(") ", 1)[1]
+            except (FileNotFoundError, ProcessLookupError):
+                # The child may disappear before /proc returns its state.
+                break
+            if process_state.startswith("Z"):
                 break
             time.sleep(0.01)
         else:

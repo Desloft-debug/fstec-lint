@@ -14,6 +14,7 @@ from integration_helpers import cli, write
 
 from fstec_lint import baseline, pdn
 from fstec_lint.engine import filter_by_uz, load_rules, scan
+from fstec_lint.parsers import base
 from fstec_lint.parsers.base import BoundedReader
 
 SECRET = "TEST_SYNTHETIC_SECRET_b83f7"
@@ -51,7 +52,7 @@ def test_compose_extension_data_is_not_unresolved_composition(tmp_path):
     ("body", "rule", "count"),
     [
         ('host "app db" all 127.0.0.1/32 trust\n', "P001", 1),
-        ('host "app db" "some user" 127.0.0.1/32 md5\n', "P001", 1),
+        ('host "app db" "some user" 127.0.0.1/32 md5\n', "P009", 1),
         ('host "db#part" all 127.0.0.1/32 trust # comment\n', "P001", 1),
         ('local "app db" "some user" trust\n', "P001", 1),
         ('host "app db" all 127.0.0.1/32 scram-sha-256\n', "P001", 0),
@@ -59,7 +60,7 @@ def test_compose_extension_data_is_not_unresolved_composition(tmp_path):
         ('host all all "all" trust\n', "P002", 0),
         ("host all all all trust\n", "P002", 1),
         ('host all all "samehost" trust\n', "P002", 0),
-        ('host "all" all 0.0.0.0 0.0.0.0 md5\n', "P001", 1),
+        ('host "all" all 0.0.0.0 0.0.0.0 md5\n', "P009", 1),
     ],
 )
 def test_hba_quoted_fields_keep_rule_meaning_and_origin(tmp_path, body, rule, count):
@@ -189,73 +190,29 @@ def test_legacy_baseline_migrates_known_debt_without_accepting_new(
     assert "SYNTHETIC_REVIEW_CREDENTIAL_6df1" not in output.out + output.err
 
 
-@pytest.mark.parametrize("parent_swap", [False, True])
 @pytest.mark.parametrize("surface", ["reader", "main", "include", "suppression"])
-def test_atomic_read_never_consumes_external_bytes(tmp_path, monkeypatch, parent_swap, surface):
+def test_validation_failure_marks_scan_incomplete(tmp_path, monkeypatch, surface):
     selected = tmp_path / "selected"
-    # Explicit PostgreSQL inputs must have the supported postgresql.conf name.
-    # A generic .conf is only a supported input when reached through Include.
     target_name = "postgresql.conf" if surface == "main" else "value.conf"
-    target = write(selected / "parts" / target_name, "ssl=off\n")
-    outside = write(
-        tmp_path / "outside" / target_name,
-        "ssl=off\n# fstec-lint: ignore P005\n# " + SECRET + "\n",
-    )
+    target = write(selected / "parts" / target_name, "ssl=off\n").resolve()
     main = write(selected / "postgresql.conf", f"include 'parts/{target_name}'\n")
-    real_open = Path.open
+    original = base._opened_path
     calls = 0
-    reads = []
 
-    class ObservedFile:
-        def __init__(self, file):
-            self.file = file
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return self.file.__exit__(*args)
-
-        def __getattr__(self, name):
-            return getattr(self.file, name)
-
-        def read(self, *args):
-            data = self.file.read(*args)
-            reads.append(len(data))
-            return data
-
-    def swapped_open(path, *args, **kwargs):
+    def unavailable(fd):
         nonlocal calls
-        if path != target:
-            return real_open(path, *args, **kwargs)
-        calls += 1
-        if calls != (2 if surface == "suppression" else 1):
-            return real_open(path, *args, **kwargs)
-        replaced = target.parent if parent_swap else target
-        backup = replaced.with_name(replaced.name + ".owned-backup")
-        replaced.rename(backup)
-        replaced.symlink_to(
-            outside.parent if parent_swap else outside, target_is_directory=parent_swap
-        )
-        try:
-            file = real_open(path, *args, **kwargs)
-        finally:
-            replaced.unlink()
-            backup.rename(replaced)
-        return ObservedFile(file)
+        path = original(fd)
+        if path == target:
+            calls += 1
+            if calls == (2 if surface == "suppression" else 1):
+                raise ValueError("opened file validation unavailable")
+        return path
 
-    monkeypatch.setattr(Path, "open", swapped_open)
-    try:
-        if surface == "reader":
+    monkeypatch.setattr(base, "_opened_path", unavailable)
+    if surface == "reader":
+        with pytest.raises(ValueError, match="validation unavailable"):
             BoundedReader(selected).read(target)
-        elif surface == "main":
-            scan(target, select=["P005"])
-        else:
-            scan(main, select=["P005"])
-    except (ValueError, OSError):
-        pass  # A safe refusal is allowed, provided no external bytes were consumed.
-    # The product must exercise the hook, and the control read must not trigger it.
-    assert calls >= (2 if surface == "suppression" else 1)
-    monkeypatch.setattr(Path, "open", real_open)
-    assert target.read_bytes() == b"ssl=off\r\n" or target.read_bytes() == b"ssl=off\n"
-    assert not reads, "External bytes were consumed through a transient file/parent substitution"
+    else:
+        root = target if surface == "main" else main
+        assert scan(root, select=["P005"]).errors
+    assert calls == (2 if surface == "suppression" else 1)

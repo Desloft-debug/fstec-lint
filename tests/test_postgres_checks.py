@@ -3,19 +3,19 @@ from fstec_lint.checks import postgres_checks as pc
 
 def test_trust_method_flagged():
     records = [{"raw": "local all all trust", "method": "trust"}]
-    findings = pc.check_trust_or_md5_auth(records)
+    findings = pc.check_trust_auth(records)
     assert len(findings) == 1
 
 
 def test_md5_method_flagged():
     records = [{"raw": "host all all 10.0.0.0/24 md5", "method": "md5"}]
-    findings = pc.check_trust_or_md5_auth(records)
-    assert len(findings) == 1
+    assert not pc.check_trust_auth(records)
+    assert len(pc.check_md5_auth(records)) == 1
 
 
 def test_scram_method_ok():
     records = [{"raw": "host all all 10.0.0.0/24 scram-sha-256", "method": "scram-sha-256"}]
-    assert pc.check_trust_or_md5_auth(records) == []
+    assert pc.check_trust_auth(records) == []
 
 
 def test_open_address_flagged():

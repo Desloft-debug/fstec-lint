@@ -198,10 +198,10 @@ def test_gost_58833_citations_point_at_known_clauses():
 
 
 def test_password_authentication_rules_cite_the_trust_level():
-    """S002 и P001 обязаны объяснять, почему пароль — это низкий уровень."""
+    """S002 и P009 обязаны объяснять, почему пароль — это низкий уровень."""
     rules = {rule.id: rule for rule in load_rules()}
 
-    for rule_id in ("S002", "P001"):
+    for rule_id in ("S002", "P009"):
         assert "низкий уровень доверия" in rules[rule_id].description, (
             f"{rule_id}: не назван уровень доверия по разделу 7.2"
         )

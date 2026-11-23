@@ -5,17 +5,19 @@
 
 Статический анализатор конфигураций инфраструктуры со справочной привязкой находок к мерам защиты ФСТЭК. Проверяет файлы локально, указывает проблемные настройки и предлагает исправления. Подходит для проверки изменений в CI и подготовки материалов к аудиту.
 
-**Версия пакета — `1.0.2`, исправленная сборка от 17.11.2026.** В каталоге **56 правил**. Это версия пакета, а не название ветки или опубликованного релиза. Требуется **Python 3.10+**; матрица CI включает Python 3.10, 3.11 и 3.12.
+**Рабочая сборка: `1.1.0.dev0`, 60 правил.** Последняя опубликованная версия — `1.0.2`. Требуется **Python 3.10+**; матрица CI включает Python 3.10, 3.11 и 3.12.
 
 Инструмент не заменяет аттестацию и не является сертифицированным средством защиты информации. Нормативные ссылки — справочные метаданные правил: их применимость и актуальность необходимо проверять по первоисточникам, модели угроз и условиям конкретной системы. Тесты целостности каталога не заменяют такую проверку.
+
+[История проверок в SQLite и демонстрация для зачёта](docs/history.md) · [Нормативные источники и границы проверок](docs/regulatory-2026.md)
 
 ## Что проверяется
 
 | Конфигурация | Правила | Основные проверки |
 |---|---|---|
-| Docker Compose | C001–C017 — 17 | root, privileged, capabilities, секреты, порты, образы, сети, тома, Docker API, ресурсы, healthcheck и журналирование |
+| Docker Compose | C001–C020 — 20 | root, privileged, capabilities, секреты, порты, образы, сети, тома, пространства имён, Docker API, ресурсы, healthcheck и журналирование |
 | Dockerfile | D001–D006 — 6 | USER, удалённый ADD, секреты в ARG, версия базового образа, передача curl/wget в shell, HEALTHCHECK |
-| PostgreSQL | P001–P008 — 8 | аутентификация и адреса в HBA, listen_addresses, TLS, алгоритм хранения паролей, журналирование и statement_timeout |
+| PostgreSQL | P001–P009 — 9 | аутентификация и адреса в HBA, listen_addresses, TLS, алгоритм хранения паролей, журналирование и statement_timeout |
 | SSH | S001–S008 — 8 | root-логин, пароли, пустые пароли, протокол, X11, число попыток входа, AuthenticationMethods и LogLevel |
 | systemd | U001–U005 — 5 | User, NoNewPrivileges, ProtectSystem, PrivateTmp и ProtectHome |
 | dotenv | E001–E003 — 3 | секреты, режим отладки и отключение защиты TLS |
@@ -91,7 +93,14 @@ fstec-lint . --production-only
 fstec-lint ./deploy --uz 3
 ```
 
-По умолчанию сканируется текущий каталог, формат отчёта — `text`, порог `--fail-on` — `high`. `--ignore` применяется после `--select`. Неизвестный ID или шаблон, которому не соответствует ни одно правило, приводит к коду 2.
+В обычном терминале запустите `fstec-lint menu` (или просто `fstec-lint`).
+Вставьте путь к папке проекта или к отдельному файлу. Кавычки вокруг пути с
+пробелами допустимы. Меню покажет число файлов, приоритеты, находки и рекомендации,
+отдельно отметит пропуски и предложит сохранить новый TXT-отчёт. Проект не запускается.
+Для сценариев используйте явный путь (например, `fstec-lint .`): запуск без аргументов
+вне терминала по-прежнему сканирует текущий каталог.
+
+Формат отчёта — `text`, порог `--fail-on` — `high`. `--ignore` применяется после `--select`. Неизвестный ID или шаблон, которому не соответствует ни одно правило, приводит к коду 2.
 
 `--uz` принимает значения 1–4 и фильтрует правила по сохранённым в проекте базовым наборам мер приказа №21. Он не определяет уровень защищённости системы и не заменяет адаптацию набора мер.
 
@@ -115,13 +124,17 @@ fstec-lint ./deploy --uz 3
 | Формат | Назначение |
 |---|---|
 | `text` | Читаемый отчёт в терминале |
-| `json` | Массив находок для последующей обработки |
+| `json` | Массив находок для совместимости со старыми сценариями |
+| `json-context` | Объект: находки, причины неполноты, наблюдения по правилам и нормативный контекст |
 | `html` | HTML-отчёт |
 | `sarif` | Отчёт для инструментов, поддерживающих SARIF |
 | `passport` | Текстовые паспорта уязвимостей |
 | `docx` | Документ Word; обязателен `--output` |
 
-Текстовые форматы по умолчанию выводятся в stdout; `--output` сохраняет отчёт в файл. Диагностика ошибок и сведения о подавленных находках выводятся в stderr. JSON содержит находки: пустой массив сам по себе не доказывает успешность сканирования — проверяйте код возврата и stderr.
+Текстовые форматы по умолчанию выводятся в stdout; `--output` сохраняет отчёт в файл. Диагностика ошибок и сведения о подавленных находках выводятся в stderr. JSON содержит находки: пустой массив сам по себе не доказывает успешность сканирования — проверяйте код возврата и stderr. Для автоматизации используйте `json-context`.
+`--require-input` отмечает отсутствие проверяемых конфигураций, а `--strict-scope`
+учитывает распознанные неопределённые настройки. `--no-inline-suppressions`
+отключает исключения из комментариев в проверяемом проекте.
 
 | Код | Значение |
 |---|---|
@@ -152,7 +165,7 @@ fstec-lint ./deploy --baseline .fstec-lint-baseline.json --fail-on high
 Формат JSON остаётся **v3**. Идентификатор находки включает правило, путь и location; текст рекомендации и номер строки в него не входят. В fingerprint разделители пути приведены к `/`. Запускайте команды из одного корня проекта, чтобы относительные пути совпадали.
 
 - **Docker D002/D005:** location содержит хеш нормализованной команды после удаления известных форм учётных данных и номер повторения одинаковой команды. Отдельные строки комментариев и сдвиг строк не меняют идентификатор. Замена адреса загрузки или другой значимой части команды остаётся новой находкой. Порядок одинаковых команд имеет значение.
-- **HBA P001/P002:** location зависит от структурных полей записи и номера её повторения; опции вроде пароля LDAP не входят в идентификатор.
+- **HBA P001/P002/P009:** location зависит от структурных полей записи и номера её повторения; опции вроде пароля LDAP не входят в идентификатор. Если прежний baseline содержал P001 для строки md5, пересмотрите запись: теперь действует P009.
 - **Старые текстовые Docker/HBA-записи:** CLI сопоставляет их только с выбранными исходниками и текущими находками. Требуется точное однозначное совпадение. Файл baseline при этом не переписывается.
 - Если запись не удалось однозначно сопоставить, возвращается код 2 с рекомендацией проверить результаты и выполнить `--write-baseline`. Старые Docker-адреса только с номером инструкции не позволяют восстановить соответствие безопасно.
 
@@ -174,8 +187,9 @@ services:
 
 ## Ограничения анализа
 
-- **Compose:** файлы анализируются отдельно. Объединение основного и override-файлов не реализовано. Обнаруженная пара, а также `include` или `extends`, приводят к сообщению о неполном анализе. Поддержка `!reset`/`!override` в отдельном файле не означает поддержку Compose merge.
-- **PostgreSQL:** поддерживаются `include`, `include_if_exists` и `include_dir` в пределах выбранного дерева, с ограничениями глубины, объёма и числа файлов. Неподдерживаемые продолжения HBA и некорректные проверяемые параметры не считаются чистым разбором. См. [PostgreSQL Include](docs/postgresql-includes.md).
+- **Compose:** без явного списка файлы анализируются отдельно; обнаруженная пара base+override остаётся неполным анализом. Явный повторяемый `--compose-file` поддерживает ограниченное локальное слияние с происхождением значений. Полный merge, `include`, `extends` и разрешение подстановок не реализованы. См. [примеры и ограничения](docs/review-acceptance.md).
+- **PostgreSQL:** локальные `include`, `include_if_exists` и `include_dir` поддерживаются в `postgresql.conf` и в формате `pg_hba.conf` PostgreSQL 16+. Находки ссылаются на исходный файл и строку. Неразобранные фрагменты не засчитываются как чистая проверка. См. [PostgreSQL Include](docs/postgresql-includes.md).
+- **systemd:** проверяется юнит с соседним каталогом `имя.service.d`. Системные пути и состояние работающего менеджера не проверяются. См. [локальные переопределения](docs/systemd-drop-ins.md).
 - **SSH:** Include раскрывается в пределах выбранного дерева. Относительная база — каталог основного файла, а не системный `/etc/ssh`; полная семантика OpenSSH не воспроизводится.
 - **nginx, rsyslog и другие форматы:** реализован разбор необходимого для проверок подмножества синтаксиса, а не полная модель сервиса.
 - **Ресурсы:** YAML Compose и правил ограничен по размеру и сложности графа; циклы и превышение бюджета дают контролируемую ошибку. JSON baseline и чтение через общий ограниченный читатель также имеют лимиты.
@@ -185,28 +199,38 @@ services:
 
 ## GitHub Actions
 
-Пример использования ветки кандидата:
+Пример workflow для обновлённой обёртки:
 
 ```yaml
 name: Configuration audit
 on: [push, pull_request]
+permissions:
+  contents: read
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Desloft-debug/fstec-lint@v1.0.2
+        with:
+          persist-credentials: false
+      - uses: Desloft-debug/fstec-lint@<проверенный-commit-SHA>
         with:
           path: deploy
           format: html
           output: fstec-lint-report.html
           fail-on: high
+          upload-report: 'false'
 ```
 
-Замените `deploy` на каталог конфигураций своего проекта. В постоянном workflow закрепите проверенный commit SHA вместо изменяемой ветки. Action устанавливает ревизию, с которой он вызван, запускает CLI и пытается загрузить отчёт как артефакт даже при падении шага сканирования.
+Замените `deploy` на каталог конфигураций своего проекта. В постоянном workflow закрепите проверенный commit SHA вместо изменяемой ветки. Action устанавливает уже выбранную копию собственного кода,
+игнорирует inline-исключения, сохраняет новый отчёт во временной папке runner и
+возвращает его путь как `steps.<id>.outputs.report`. Параметр `output` задаёт
+имя файла без папки. Публикация отчёта как артефакта выключена по умолчанию;
+`upload-report: 'true'` включайте только если содержание можно включить в артефакт.
+Для чужого PR не исполняйте локальный Action и не давайте заданию доступ к секретам.
 
-Обёртка предоставляет параметры `path`, `format`, `output`, `fail-on`. Для baseline, выбора правил и других опций установите пакет отдельным шагом и вызовите CLI напрямую.
+Обёртка предоставляет параметры `path`, `format`, `output`, `fail-on`, `upload-report`. Для baseline, выбора правил и других опций установите пакет отдельным шагом и вызовите CLI напрямую.
 
 ## Примеры
 
@@ -272,6 +296,7 @@ CI запускается для pull request и push в `main`: сборка и
 | Архитектура и добавление правил | [architecture.md](docs/architecture.md) |
 | Ограничения чтения, ресурсы и baseline | [security.md](docs/security.md) |
 | PostgreSQL Include | [postgresql-includes.md](docs/postgresql-includes.md) |
+| systemd drop-ins | [systemd-drop-ins.md](docs/systemd-drop-ins.md) |
 | Разбор dotenv | [dotenv.md](docs/dotenv.md) |
 | Связи правил с предметами мер | [rules-subjects.md](docs/rules-subjects.md) |
 | Нормативные поля приказа №117 | [measures-117.md](docs/measures-117.md) |
@@ -288,7 +313,7 @@ CI запускается для pull request и push в `main`: сборка и
 
 ## English summary
 
-`fstec-lint` is a local static configuration analyzer with **56 rules** covering Docker Compose, Dockerfiles, PostgreSQL, SSH, systemd, dotenv, selected Linux settings, nginx and Postfix. Findings include severity, remediation and reference mappings to FSTEC measures.
+`fstec-lint` is a local static configuration analyzer with **60 rules** covering Docker Compose, Dockerfiles, PostgreSQL, SSH, systemd, dotenv, selected Linux settings, nginx and Postfix. Findings include severity, remediation and reference mappings to FSTEC measures.
 
 The package version is **`1.0.2`**, rebuilt with fixes on 2026-11-17. Python **3.10+** is required. Install from the desired checkout with `python -m pip install -e .`, then run:
 
@@ -303,7 +328,7 @@ Output formats are `text`, `json`, `html`, `sarif`, `passport` and `docx`; DOCX 
 
 Baseline v3 supports stable Docker identities and exact matching of legacy text-based Docker/HBA entries against selected sources. Ambiguous entries are rejected. Reports and baselines still require access controls; hashing is not encryption.
 
-Compose merge is unsupported. PostgreSQL and SSH includes are limited to the selected tree and supported syntax. The analyzer does not execute configuration commands or certify a running system. Regulatory mappings are reference information and require independent verification.
+Compose files can be supplied in overlay order using a limited local subset; the complete merge specification is not implemented. PostgreSQL and SSH includes are limited to the selected tree and supported syntax. The analyzer does not execute configuration commands or certify a running system. Regulatory mappings are reference information and require independent verification.
 
 The documented local Windows run passed **1496 tests**, skipped **86**, and reached **94.41% coverage**. Consult the CI run for the exact commit for Linux results.
 

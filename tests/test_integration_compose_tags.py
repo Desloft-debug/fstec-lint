@@ -34,7 +34,7 @@ def test_override_preserves_stock_yaml_types(tmp_path, value):
         ("privileged: !reset true", "C002", False),
         ("cap_drop: [ALL]\ncap_add: !reset [SYS_ADMIN]", "C003", False),
         ("environment: !reset {PASSWORD: SYNTHETIC_TEST_TAG_SECRET}", "C004", False),
-        ("cap_drop: !reset [ALL]", "C003", True),
+        ("cap_drop: !reset [ALL]", "C003", False),
     ],
 )
 def test_single_file_effective_tag_policy(tmp_path, body, rule, reported):

@@ -77,11 +77,13 @@ class Finding:
             return self.file
         return relative
 
-    def fingerprint(self) -> str:
+    def fingerprint(self, *, relative_file: str | None = None) -> str:
         """Идентификатор находки для baseline.
 
         Ни detail, ни line не входят: текст меняется при правках
         формулировок, номер строки — при вставке выше по файлу.
         """
-        file = self.relative_file().replace("\\", "/")
+        file = (relative_file if relative_file is not None else self.relative_file()).replace(
+            "\\", "/"
+        )
         return f"{self.rule.id}|{file}|{self.location}"

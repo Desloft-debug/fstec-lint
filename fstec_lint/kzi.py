@@ -113,7 +113,9 @@ GROUPS: tuple[Group, ...] = (
 # Это материал ДЛЯ оценки, а не сама оценка: значение показателю
 # присваивает орган (организация) по совокупности данных.
 SUPPORTED_INDICATORS: dict[str, tuple[str, ...]] = {
-    "k23": ("C004", "D003", "P001"),
+    # Name-based secret indicators are investigative leads only, not evidence of a default
+    # password. PostgreSQL trust has no password authentication and is not a k23 lead.
+    "k23": ("C004", "D003"),
     "k31": ("C005", "C007", "C011", "P002", "P003"),
     "k32": ("C006", "D004"),
     "k42": ("P004", "P007"),

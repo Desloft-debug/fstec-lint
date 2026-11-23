@@ -11,7 +11,24 @@ from .base import BoundedReader
 # формат v1: сервисы лежат прямо в корне. Разбирать его как современный
 # значит выдать «нарушений не найдено» на непроверенном файле.
 TOP_LEVEL_KEYS = frozenset(
-    {"services", "version", "volumes", "networks", "configs", "secrets", "include", "name", "x-"}
+    {
+        "services",
+        "version",
+        "volumes",
+        "networks",
+        "configs",
+        "secrets",
+        "include",
+        "name",
+        "models",
+        "x-",
+    }
+)
+
+COMPOSE_V1_ERROR = (
+    "нет ни одного ключа верхнего уровня современного compose "
+    f"({', '.join(sorted(TOP_LEVEL_KEYS - {'x-'}))}) — похоже на формат "
+    "docker-compose v1, который не поддерживается"
 )
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -288,17 +305,41 @@ def _guard_schema(data: dict[str, Any]) -> None:
         if any(key not in TOP_LEVEL_KEYS and not str(key).startswith("x-") for key in data):
             raise ValueError("unsupported Compose top-level keys")
         return
-    raise ValueError(
-        "нет ни одного ключа верхнего уровня современного compose "
-        f"({', '.join(sorted(TOP_LEVEL_KEYS - {'x-'}))}) — похоже на формат "
-        "docker-compose v1, который не поддерживается"
-    )
+    raise ValueError(COMPOSE_V1_ERROR)
+
+
+class ComposeMergeError(ValueError):
+    """Safe diagnostic for an unsupported or ambiguous Compose overlay."""
+
+
+def _guard_overlay_nodes(root: Any) -> None:
+    """Refuse input whose merge or source attribution is not implemented."""
+    pending = [root] if root is not None else []
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            raise ComposeMergeError("алиасы YAML в наложении Compose не поддерживаются")
+        seen.add(id(node))
+        if node.tag in {"!reset", "!override", "tag:yaml.org,2002:merge"}:
+            raise ComposeMergeError("теги сброса, замены и слияния YAML не поддерживаются")
+        if isinstance(node, yaml.ScalarNode):
+            if "$" in node.value:
+                raise ComposeMergeError("подстановки в наложении Compose не поддерживаются")
+        elif isinstance(node, yaml.SequenceNode):
+            pending.extend(node.value)
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                pending.extend((key, value))
 
 
 def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
     """Разбирает docker-compose.yml в ComposeFile (dict + номера строк)."""
     text = BoundedReader(scan_root or path.parent, max_bytes=MAX_FILE_BYTES).read(path)
+    return _parse_compose_text(text)
 
+
+def _parse_compose_text(text: str, *, overlay: bool = False) -> ComposeFile:
     try:
         loader = _BoundedLoader(text)
     except yaml.YAMLError:
@@ -306,10 +347,14 @@ def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
     try:
         root = loader.get_single_node()
         _guard_graph(root)
+        if overlay:
+            _guard_overlay_nodes(root)
         _guard_duplicate_keys(root, loader)
         _guard_merges(root)
         lines, spans = _line_marks(root)
         data = loader.construct_document(root) if root is not None else None
+    except ComposeMergeError:
+        raise
     except yaml.MarkedYAMLError as exc:
         mark = exc.problem_mark
         safe_mark = (
@@ -330,6 +375,15 @@ def parse_compose(path: Path, scan_root: Path | None = None) -> ComposeFile:
         raise ValueError("unsupported Compose shape")
     mapping = data if isinstance(data, dict) else {}
     _guard_schema(mapping)
+    if "models" in mapping:
+        models = mapping["models"]
+        if not isinstance(models, dict) or any(
+            not isinstance(spec, dict)
+            or not isinstance(spec.get("model"), str)
+            or not spec["model"].strip()
+            for spec in models.values()
+        ):
+            raise ValueError("unsupported Compose models shape")
     services = mapping.get("services", {})
     if not isinstance(services, dict) or any(
         not isinstance(service, dict) for service in services.values()

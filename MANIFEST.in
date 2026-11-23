@@ -1,3 +1,5 @@
 include LICENSE README.md CHANGELOG.md RELEASE_NOTES.md
 recursive-include docs *.md
 recursive-include fstec_lint/rules *.yaml
+include docs/history_queries.sql
+include examples/history-demo.py

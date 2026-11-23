@@ -34,7 +34,7 @@ def test_render_text_lists_every_rule():
         assert rule.id in output
     assert "Затронутые пункты приказа ФСТЭК N 117:" in output
     # Technical catalog consistency, not approval of regulatory applicability.
-    assert "Направления методики оценки уровня зрелости (07.08.2026): 3 (19)" in output
+    assert "Направления методики оценки уровня зрелости (07.08.2026): 3 (21)" in output
 
 
 def test_render_json_shape():

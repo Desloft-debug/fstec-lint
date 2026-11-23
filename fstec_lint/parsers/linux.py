@@ -16,14 +16,15 @@ from .base import BoundedReader, ConfigMap, SourceLine
 MAX_INCLUDE_DEPTH = 16
 
 
-def parse_login_defs(path: Path) -> ConfigMap:
+def parse_login_defs(path: Path, scan_root: Path | None = None) -> ConfigMap:
     """login.defs: «КЛЮЧ значение», комментарий — строка с '#'.
 
     При повторе действует последнее значение: так читает файл getdef()
     из shadow-utils.
     """
     config = ConfigMap()
-    for lineno, raw in enumerate(BoundedReader(path.parent).read(path).splitlines(), start=1):
+    text = BoundedReader(scan_root or path.parent).read(path)
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -56,10 +57,11 @@ def parse_pwquality(
     return config
 
 
-def parse_useradd_defaults(path: Path) -> ConfigMap:
+def parse_useradd_defaults(path: Path, scan_root: Path | None = None) -> ConfigMap:
     """/etc/default/useradd: «КЛЮЧ=значение»; при повторе действует последнее."""
     config = ConfigMap()
-    for lineno, raw in enumerate(BoundedReader(path.parent).read(path).splitlines(), start=1):
+    text = BoundedReader(scan_root or path.parent).read(path)
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

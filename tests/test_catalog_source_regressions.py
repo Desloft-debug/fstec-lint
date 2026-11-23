@@ -18,8 +18,11 @@ RULES = {rule.id: rule for rule in load_rules()}
 
 
 @pytest.mark.parametrize("rule_id", sorted(RULES))
-def test_each_rule_has_resolvable_order21_metadata(rule_id):
+def test_order21_metadata_is_resolvable_or_deliberately_unmapped(rule_id):
     rule = RULES[rule_id]
+    if rule_id in {"C018", "C019", "C020"}:
+        assert (rule.pdn_measure, rule.pdn_measure_title) == ("", "")
+        return
     assert rule.pdn_measure in pdn.MEASURES
     measure = pdn.MEASURES[rule.pdn_measure]
     assert (rule.pdn_measure_title, measure.group in pdn.GROUPS) == (measure.title, True)
